@@ -933,7 +933,7 @@
         loadingBar.style.width = percents + "%";
       };
       const atlases = [
-        ["./img/a0.{webp,png}.15284bb28c.json"]
+        ["./img/a0.{webp,png}.9c364067f7.json"]
       ][0];
       const tiledImages = [
         {}
@@ -1473,7 +1473,7 @@ G.main.frameStart()
 'thisOnCreate': function () {
             /* behavior ECS — core_OnRoomStart (On room start event) */
 {
-G.main.roomStart()
+G.main.init()
 }
 
             },
@@ -1481,13 +1481,6 @@ G.main.roomStart()
             /* behavior ECS — core_OnDraw (On frame end event) */
 {
 G.main.frameEnd()
-}
-
-            },
-'thisOnDestroy': function () {
-            /* behavior ECS — core_OnRoomEnd (On room end event) */
-{
-G.main.roomEnd()
 }
 
             }
@@ -4376,7 +4369,7 @@ keyboard.clear();
      * The name of the starting room, as it was set in ct.IDE.
      * @type {string}
      */
-    starting: "MainMenu"
+    starting: "Game"
   };
   var rooms_default = roomsLib;
 
@@ -5111,185 +5104,187 @@ keyboard.clear();
 
   // src/ct.release/scripts.ts
   var scriptsLib = {
-    'EventSystem': function (options) { var _class;
-  return (_class = class EventSystem extends System {constructor(...args) { super(...args); _class.prototype.__init.call(this); }
-    __init() {this.PRIORITY = Priority.LAST}
+    'Event.sys': function (options) {
+  return createSystem({
+    PRIORITY: Priority.LAST,
+
     onCleanUp() {
       G.events.w.clear()
     }
-  }, _class)},'BoardGenerationSystem': function (options) {
-  return class BoardGenerationSystem extends System {
+  })},'BoardGeneration.sys': function (options) {
 
-    onUpdate() {
+  function emitEvents(board) {
+    const { add } = G.events.w
+    board.state = BoardState.Unsolved
+    add({ [EC.BoardGenerated]: true })
+    board.flasks.forEach(({ id }) => add({ [EC.FlaskUpdated]: id }))
+  }
+
+  function getUnsortedFlasks(board, sortedFlasks) {
+
+    const flasks = utils.arrayOf(board.count, (i) => new Flask(i, board.volume))
+    const unfilledFlasks = [...flasks]
+    const liquids = utils.shuffle(sortedFlasks.flat())
+
+    for (let i = liquids.length; i > 0; i--) {
+      const liquid = liquids.pop()
+
+      while (true) {
+        const flaskBIndex = Math.round(random(unfilledFlasks.length - 1))
+        const flaskB = unfilledFlasks[flaskBIndex]
+        if (isFilledBySameType(liquid, flaskB)) continue
+
+        flaskB.stack.push(liquid)
+
+        if (isFull(flaskB))
+          removeByIndex(unfilledFlasks, flaskBIndex)
+
+        break
+      }
+    }
+
+    flasks.forEach((flask, id) => {
+      flask.id = id
+      Flask.updateState(flask)
+    })
+
+    return flasks
+  }
+
+  function removeByIndex(array, index) {
+    array[index] = array[array.length - 1]
+    array.pop()
+  }
+
+  function getSortedFlasks(board, colors) {
+    const flaskCount = board.count - board.emptyCount
+    const colorList = []
+    while (colorList.length < flaskCount) {
+      colorList.push(...colors)
+    }
+    return colorList.slice(0, flaskCount).map((color) => utils.arrayOf(board.volume, () => color))
+  }
+
+  function getTypes({ colors }) {
+    return utils.shuffle(Object.keys(LiquidType).map(ballType => ballType)).slice(0, colors) 
+  }
+
+  function isFull(flask) {
+    return flask.stack.length === flask.volume
+  }
+
+  function isFilledBySameType(ballType, flask) {
+    const { volume, stack } = flask
+    if (stack.length < volume - 1) return false
+
+    return !stack.find((b) => b !== ballType)
+  }
+
+  return createSystem({
+    onStart() {
       for (const event of G.events.w.queries.setBoard) {
         const board = event[EC.SetBoard]
-        const colors = this.getTypes(board)
-        const sortedFlasks = this.getSortedFlasks(board, colors)
-        board.flasks = this.getUnsortedFlasks(board, sortedFlasks)
+        const colors = getTypes(board)
+        const sortedFlasks = getSortedFlasks(board, colors)
+        board.flasks = getUnsortedFlasks(board, sortedFlasks)
         G.model.board = board
 
-        this.emitEvents(board)
+        emitEvents(board)
       }
     }
+  })},'FlaskSelection.sys': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+  function select(id) {
+    const { board } = G.model
+    const flask = board.flasks[id]
+    if (!flask) return
 
-     emitEvents(board) {
-      const { add } = G.events.w
-      board.state = BoardState.Unsolved
-      add({ [EC.BoardGenerated]: true })
-      board.flasks.forEach(({ id }) => add({ [EC.FlaskUpdated]: id }))
+    const isSelectable = Flask.isSelectable(flask)
+    if (board.selectedFlask === null && isSelectable) selectFlask(flask)
+    else if (board.selectedFlask === flask) deselectCurrentFlask()
+    else if (flask.stack.length === flask.volume && isSelectable) {
+      deselectCurrentFlask()
+      selectFlask(flask)
     }
+    else tryPour(flask)
+  }
 
-     getUnsortedFlasks(board, sortedFlasks) {
+  function tryPour(flask) {
+    G.events.w.add({ [EC.TryPour]: flask.id })
+  }
 
-      const flasks = utils.arrayOf(board.count, (i) => new Flask(i, board.volume))
-      const unfilledFlasks = [...flasks]
-      const liquids = utils.shuffle(sortedFlasks.flat())
+  function selectFlask(flask) {
+    G.model.board.selectedFlask = flask
+    flask.selection = SelectionState.Selected
 
-      for (let i = liquids.length; i > 0; i--) {
-        const liquid = liquids.pop()
+    G.events.w.add({ [EC.FlaskSelected]: flask.id, [EC.FlaskUpdated]: flask.id })
+  }
 
-        while (true) {
-          const flaskBIndex = Math.round(random(unfilledFlasks.length - 1))
-          const flaskB = unfilledFlasks[flaskBIndex]
-          if (this.isFilledBySameType(liquid, flaskB)) continue
+  function deselectCurrentFlask() {
+    const { board } = G.model
+    if (board.selectedFlask === null) return
+    const flask = board.selectedFlask
+    board.selectedFlask = null
+    flask.selection = SelectionState.NotSelected
 
-          flaskB.stack.push(liquid)
+    G.events.w.add({ [EC.FlaskDeselected]: flask.id, [EC.FlaskUpdated]: flask.id })
+  }
 
-          if (this.isFull(flaskB))
-            this.removeByIndex(unfilledFlasks, flaskBIndex)
-
-          break
-        }
-      }
-
-      flasks.forEach((flask, id) => {
-        flask.id = id
-        Flask.updateState(flask)
-      })
-
-      return flasks
-    }
-
-     removeByIndex(array, index) {
-      array[index] = array[array.length - 1]
-      array.pop()
-    }
-
-     getSortedFlasks(board, colors) {
-      const flaskCount = board.count - board.emptyCount
-      const colorList = []
-      while (colorList.length < flaskCount) {
-        colorList.push(...colors)
-      }
-      return colorList.slice(0, flaskCount).map((color) => utils.arrayOf(board.volume, () => color))
-    }
-
-     getTypes({ colors }) {
-      return utils.shuffle(Object.keys(LiquidType).map(ballType => ballType)).slice(0, colors) 
-    }
-
-     isFull(flask) {
-      return flask.stack.length === flask.volume
-    }
-
-     isFilledBySameType(ballType, flask) {
-      const { volume, stack } = flask
-      if (stack.length < volume - 1) return false
-
-      return !stack.find((b) => b !== ballType)
-    }
-  }},'FlaskSelectionSystem': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
-  return class FlaskSelectionSystem extends System {
+  return createSystem({
     onFlaskSelection() {
       const { board } = G.model
       if (_optionalChain([board, 'optionalAccess', _ => _.state]) !== BoardState.Unsolved) return
       const event = G.events.w.queries.flaskClicked.first
+      if (!event) return
       const id = _nullishCoalesce(_optionalChain([event, 'optionalAccess', _2 => _2[EC.FlaskClicked]]), () => ( -1))
       const clickType = _optionalChain([event, 'optionalAccess', _3 => _3[EC.ClickType]])
       const isClickedSelected = _optionalChain([board, 'access', _4 => _4.selectedFlask, 'optionalAccess', _5 => _5.id]) === id
 
       if (clickType === ClickType.Secondary) {
         if (isClickedSelected || id === -1)
-          return this.deselectCurrentFlask()
+          return deselectCurrentFlask()
 
         const flask = board.flasks[id]
         if (!Flask.isSelectable(flask)) return
-        this.deselectCurrentFlask()
-        this.selectFlask(flask)
+        deselectCurrentFlask()
+        selectFlask(flask)
       }
-      else if (clickType === ClickType.Primary) this.select(id)
-    }
+      else if (clickType === ClickType.Primary) select(id)
+    },
 
     onAfterPouring() {
       if (G.events.w.queries.poured.size) {
-        this.deselectCurrentFlask()
+        deselectCurrentFlask()
       }
     }
+  })},'Pouring.sys': function (options) {
+  function canPour(from, to) {
+    return to.stack.length < to.volume && (Flask.peak(from) === Flask.peak(to) || to.state === FlaskState.Empty)
+  }
 
-     select(id) {
-      const { board } = G.model
-      const flask = board.flasks[id]
-      if (!flask) return
-
-      const isSelectable = Flask.isSelectable(flask)
-      if (board.selectedFlask === null && isSelectable) this.selectFlask(flask)
-      else if (board.selectedFlask === flask) this.deselectCurrentFlask()
-      else if (flask.stack.length === flask.volume && isSelectable) {
-        this.deselectCurrentFlask()
-        this.selectFlask(flask)
-      }
-      else this.tryPour(flask)
+  function pour(from, to) {
+    const startBall = from.stack[from.stack.length - 1]
+    for (let nextBall = startBall; nextBall === startBall && to.stack.length < to.volume;) {
+      const ball = from.stack.pop()
+      to.stack.push(ball)
+      nextBall = from.stack[from.stack.length - 1]
     }
 
-     tryPour(flask) {
-      G.events.w.add({ [EC.TryPour]: flask.id })
-    }
+    G.events.w.add({ [EC.Poured]: to.id, [EC.FlaskUpdated]: to.id })
+  }
 
-     selectFlask(flask) {
-      G.model.board.selectedFlask = flask
-      flask.selection = SelectionState.Selected
-
-      G.events.w.add({ [EC.FlaskSelected]: flask.id, [EC.FlaskUpdated]: flask.id })
-    }
-
-     deselectCurrentFlask() {
-      const { board } = G.model
-      if (board.selectedFlask === null) return
-      const flask = board.selectedFlask
-      board.selectedFlask = null
-      flask.selection = SelectionState.NotSelected
-
-      G.events.w.add({ [EC.FlaskDeselected]: flask.id, [EC.FlaskUpdated]: flask.id })
-    }
-  }},'PouringSystem': function (options) {
-  return class PouringSystem extends System {
+  return createSystem({
     onPouring() {
       const { board } = G.model
       for (const event of G.events.w.queries.tryPour) {
         const from = board.selectedFlask
         const to = board.flasks[event[EC.TryPour]]
         if (!from || !to) continue
-        if (!this.canPour(from, to)) continue
-        this.pour(from, to)
+        if (!canPour(from, to)) continue
+        pour(from, to)
       }
     }
-
-     canPour(from, to) {
-      return to.stack.length < to.volume && (Flask.peak(from) === Flask.peak(to) || to.state === FlaskState.Empty)
-    }
-
-     pour(from, to) {
-      const startBall = from.stack[from.stack.length - 1]
-      for (let nextBall = startBall; nextBall === startBall && to.stack.length < to.volume;) {
-        const ball = from.stack.pop()
-        to.stack.push(ball)
-        nextBall = from.stack[from.stack.length - 1]
-      }
-
-      G.events.w.add({ [EC.Poured]: to.id, [EC.FlaskUpdated]: to.id })
-    }
-  }},'FlaskStateSystem': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
-  return class FlaskStateSystem extends System {
+  })},'FlaskState.sys': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+  return createSystem({
     onPreRender() {
       const { board } = G.model
       const { add } = G.events.w
@@ -5310,8 +5305,33 @@ keyboard.clear();
         add({ [EC.BoardSolved]: true })
       }
     }
-  }
-},'flask.yTween': function (options) {
+  })},'Game.sys': function (options) {
+    var E; (function (E) { const UPDATE = 0; E[E["UPDATE"] = UPDATE] = "UPDATE"; })(E || (E = {}));
+
+    const { Launching, MainMenu, Gameplay, Paused } = GameState
+    const { UPDATE } = E
+
+    const gameFSM = new fsm.HFSM({
+        states: {
+            [Launching]: { transitions: [{ event: UPDATE, to: MainMenu }] },
+            [MainMenu]: { transitions: [{ event: UPDATE, to: Gameplay, condition: isStarted }] },
+            [Gameplay]: { transitions: [{ event: UPDATE, to: Paused, condition: isPausePressed }] },
+            [Paused]: { transitions: [{ event: UPDATE, to: Gameplay, condition: () => isPausePressed() || isStarted() }] },
+        }
+    })
+
+    function isStarted() { return G.hasEvent('setBoard') }
+    function isPausePressed() { return actions.Escape.pressed }
+
+    return createSystem({
+        onInit() {
+            gameFSM.context = G.game
+        },
+
+        onUpdate() {
+            gameFSM.dispatch(UPDATE)
+        }
+    })},'flask.yTween': function (options) {
     const [flaskContainer] = arguments
     const offset = flaskContainer.height / 2
     return function yTween(y, options = {}) {
@@ -5333,7 +5353,7 @@ keyboard.clear();
             silent: true,
             ...options
         })
-    }},'LiquidLayerRenderSystem': function (options) {    const FLASK_SCALE = 1, MAX_FLASK_WIDTH = 128, MAX_FLASK_HEIGHT = 400
+    }},'LiquidLayerRender.sys': function (options) {    const FLASK_SCALE = 1, MAX_FLASK_WIDTH = 128, MAX_FLASK_HEIGHT = 400
     const flaskWidth = MAX_FLASK_WIDTH * FLASK_SCALE, flaskHeight = MAX_FLASK_HEIGHT * FLASK_SCALE
     const PADDING = 20
 
@@ -5439,16 +5459,16 @@ keyboard.clear();
         newLayers.push(layer.id)
     }
 
-    return class LiquidLayerRenderSystem extends System {
+    return createSystem({
         onRender() {
             const { queries } = G.view.w
             for (const viewEntity of queries.flask) {
                 drawLiquidLayers(viewEntity)
             }
         }
-    }},'SpriteRemovingSystem': function (options) { var _class;
-    return (_class = class SpriteRemovingSystem extends System {constructor(...args) { super(...args); _class.prototype.__init.call(this); }
-        __init() {this.PRIORITY = Priority.Lowest}
+    })},'SpriteRemoving.sys': function (options) {
+    return createSystem({
+        PRIORITY: Priority.Lowest,
 
         onCleanUp() {
             const { queries, addComponent } = G.view.w
@@ -5461,23 +5481,126 @@ keyboard.clear();
                 if (entity[VC.Copy].kill) addComponent(entity, VC.Remove)
             }
         }
-    }, _class)},'ViewEntityRemovingSystem': function (options) { var _class;
-    return (_class = class ViewEntityRemovingSystem extends System {constructor(...args) { super(...args); _class.prototype.__init.call(this); }
-        __init() {this.PRIORITY = Priority.LAST}
+    })},'ViewEntityRemoving.sys': function (options) {
+    return createSystem({
+        PRIORITY: Priority.LAST,
 
         onCleanUp() {
-            const { queries ,remove} = G.view.w
+            const { queries, remove } = G.view.w
 
             for (const entity of queries.remove) {
                 remove(entity)
             }
-        }
+        },
 
         onEnd() {
             G.view.w.clear()
         }
-    }, _class)
-},'BoardViewSystem': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+    })
+},'PauseMenu.sys': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }
+    var E; (function (E) { const U = 0; E[E["U"] = U] = "U"; })(E || (E = {}));
+    var S; (function (S) { const Start = 0; S[S["Start"] = Start] = "Start"; const Hiden = Start + 1; S[S["Hiden"] = Hiden] = "Hiden"; const Shown = Hiden + 1; S[S["Shown"] = Shown] = "Shown"; })(S || (S = {}));
+    
+
+    const pauseMenuFSM = new fsm.HFSM({
+        context: { state: S.Start, pauseMenu: null  },
+        states: {
+            [S.Start]: {
+                transitions: [
+                    { event: E.U, to: S.Hiden, condition: hasMenu },
+                    { event: E.U, on: [findPauseMenu] }
+                ]
+            },
+            [S.Hiden]: {
+                transitions: [{ event: E.U, to: S.Shown, condition: isPaused }],
+                entry: [hide]
+            },
+            [S.Shown]: {
+                transitions: [{ event: E.U, to: S.Hiden, condition: isNotPaused }],
+                entry: [show]
+            },
+        }
+    })
+
+    function hasMenu(c) { return !!c.pauseMenu }
+    function isPaused() { return G.game.state === GameState.Paused }
+    function isNotPaused() { return !isPaused() }
+
+    function findPauseMenu(context) {
+        context.pauseMenu = _nullishCoalesce(rooms.list['UI.PauseMenu'][0], () => ( null))
+    }
+
+    async function hide({ pauseMenu }) {
+        pauseMenu.eventMode = 'none'
+        await tween.add({ obj: pauseMenu, duration: 300, silent: true, fields: { alpha: 0 } })
+        pauseMenu.visible = false
+    }
+
+    function show({ pauseMenu }) {
+        pauseMenu.visible = true
+        pauseMenu.eventMode = 'static'
+        tween.add({ obj: pauseMenu, duration: 300, silent: true, fields: { alpha: 1 } })
+    }
+
+    const sys = createSystem({
+        onUI() {
+            pauseMenuFSM.dispatch(E.U)
+        }
+    })
+
+    return sys},'MainMenu.sys': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }
+    var E; (function (E) { const U = 0; E[E["U"] = U] = "U"; })(E || (E = {}));
+    var S; (function (S) { const Start = 0; S[S["Start"] = Start] = "Start"; const Hiden = Start + 1; S[S["Hiden"] = Hiden] = "Hiden"; const Shown = Hiden + 1; S[S["Shown"] = Shown] = "Shown"; })(S || (S = {}));
+    
+
+    const pauseMenuFSM = new fsm.HFSM({
+        context: { state: S.Start, mainMenu: null  },
+        states: {
+            [S.Start]: {
+                transitions: [
+                    { event: E.U, to: S.Shown, condition: hasMenu },
+                    { event: E.U, on: [findPauseMenu] },
+                ]
+            },
+            [S.Hiden]: {
+                transitions: [{ event: E.U, to: S.Shown, condition: isInMainMenu }],
+                entry: [hide]
+            },
+            [S.Shown]: {
+                transitions: [{ event: E.U, to: S.Hiden, condition: isNotInMainMenu }],
+                entry: [show]
+            },
+        }
+    })
+
+    function hasMenu(c) { return !!c.mainMenu }
+    function isInMainMenu() { return G.game.state === GameState.MainMenu }
+    function isNotInMainMenu() { return !isInMainMenu() }
+
+    function findPauseMenu(context) {
+        context.mainMenu = _nullishCoalesce(rooms.list['UI.MainMenu'][0], () => ( null))
+    }
+
+    async function hide({ mainMenu }) {
+        await tween.add({ obj: mainMenu, duration: 500, silent: true, fields: { alpha: 0 } })
+        mainMenu.visible = false
+        mainMenu.eventMode = 'none'
+    }
+
+    function show({ mainMenu }) {
+        mainMenu.visible = true
+        mainMenu.eventMode = 'static'
+        tween.add({ obj: mainMenu, duration: 500, silent: true, fields: { alpha: 1 } })
+    }
+
+    const sys = createSystem({
+        onUI() {
+            pauseMenuFSM.dispatch(E.U)
+        }
+    })
+
+    return sys
+},'BoardView.sys': function (options) {
     const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 128, MAX_FLASK_HEIGHT = 400
     const
         flaskWidth = MAX_FLASK_WIDTH,
@@ -5497,32 +5620,34 @@ keyboard.clear();
 
 
 
-    const { Start, Play, End, Restarting, Win } = BoardViewState
+    const { Start, Play, End, Restarting, Win, } = BoardViewState
     const { UPDATE, FADED_OUT, } = BoardViewEvent
 
     const boardViewFSM = new fsm.HFSM({
         states: {
-            [Start]: { transitions: [{ event: UPDATE, to: Play, condition: canDrawBoard, onBefore: [drawBoard] }] },
+            [Start]: { transitions: [{ event: UPDATE, to: Play, condition: canDrawBoard, on: [drawBoard] }] },
             [Play]: {
                 transitions: [
                     { event: UPDATE, to: Win, condition: isSolved },
                     { event: UPDATE, to: Restarting, condition: isRestarting },
                 ],
             },
-            [Restarting]: { transitions: [{ event: FADED_OUT, to: End }], onBeforeEnter: [fadeRestarting] },
-            [Win]: { transitions: [{ event: FADED_OUT, to: End }], onBeforeEnter: [fadeFlasks] },
-            [End]: {},
+            [Restarting]: { transitions: [{ event: FADED_OUT, to: End }], entry: [fadeRestarting] },
+            [Win]: { transitions: [{ event: FADED_OUT, to: End }], entry: [fadeFlasks] },
+            [End]: { entry: [eraseBoard] },
         }
     })
 
     function isSolved() { return G.hasEvent('boardSolved') }
     function isRestarting() { return G.hasEvent('restart') }
     function canDrawBoard() {
-        return _optionalChain([G, 'access', _ => _.model, 'access', _2 => _2.board, 'optionalAccess', _3 => _3.state]) !== BoardState.Generating && !!templates.list.Board.length
+        if (!G.model.board) return false
+        return G.model.board.state !== BoardState.Generating
     }
 
     function updateBoard(context) {
         const board = getBoardContainer()
+        if (!board) return
         board.alphaFilter.alpha = 1 - context.fadingOutProgress
     }
 
@@ -5553,19 +5678,26 @@ keyboard.clear();
     }
 
     async function fadeRestarting(context) {
-        await tween.add({
-            obj: context,
-            fields: { fadingOutProgress: 1 },
-            duration: 1000,
-            silent: true,
-            curve: tween.easeOutCubic
-        })
-        return FADED_OUT
+        try {
+            await tween.add({
+                obj: context,
+                fields: { fadingOutProgress: 1 },
+                duration: 1000,
+                silent: true,
+                curve: tween.easeOutCubic
+            })
+            return FADED_OUT
+        } catch (e) { }
     }
 
     const getBoardContainer = () => { return templates.list.Board[0] }
 
+    function eraseBoard() {
+        rooms.remove(rooms.list['Level'][0])
+    }
+
     function drawBoard() {
+        rooms.prepend('Level')
         const { board } = G.model
         const container = getBoardContainer()
         const
@@ -5604,22 +5736,27 @@ keyboard.clear();
             viewEntity[VC.LiquidContainer] = copy.liquidContainer
             container.addChild(copy)
         })
+        for (const flask of G.view.w.queries.flask) {
+            G.view.w.addComponent(flask, VC.Remove)
+        }
     }
 
 
-    return class BoardViewSystem extends System {
+    return createSystem({
         onStart() {
             G.view.board = { state: Start }
             boardViewFSM.context = { state: Start, fadingOutProgress: 0 }
-        }
-        onPreRender() {
-            boardViewFSM.dispatch(UPDATE)
-            updateBoard(boardViewFSM.context)
-            G.view.board.state = boardViewFSM.context.state
-        }
-    }
+        },
 
-},'LevelSystem': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+        onPreRender() {
+            if (!G.view.board) return
+            boardViewFSM.dispatch(UPDATE)
+            G.view.board.state = boardViewFSM.context.state
+            updateBoard(boardViewFSM.context)
+        }
+    })
+
+},'Level.sys': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
   function isViewFaded() {
     return _optionalChain([G, 'access', _ => _.view, 'access', _2 => _2.board, 'optionalAccess', _3 => _3.state]) === BoardViewState.End
   }
@@ -5628,13 +5765,15 @@ keyboard.clear();
     return _optionalChain([G, 'access', _4 => _4.model, 'access', _5 => _5.board, 'optionalAccess', _6 => _6.state]) === BoardState.Solved
   }
 
-  return class LevelSystem extends System {
-    onLateUpdate() {
+  return createSystem({
+    onUpdate() {
       if (isViewFaded()) {
-        rooms.switch(rooms.current.name)
+        const config = scripts.LEVEL_CONFIGS()[LevelMode.CLASSIC_RANDOM]
+        G.main.endLevel()
+        G.main.startLevel(config)
       }
     }
-  }},'LEVEL_CONFIGS': function (options) {
+  })},'LEVEL_CONFIGS': function (options) {
     return {
         [LevelMode.CLASSIC_RANDOM]: {
             volume: Math.round(random.range(2, 12)),
@@ -5757,7 +5896,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
     deadPool.length = 0;
   }, 1e3 * 60);
   var meta = [
-    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.0"}
+    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.1"}
   ][0];
   var currentViewMode = "scaleFill";
   var currentHighDPIMode = Boolean([
@@ -5993,6 +6132,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
     inputs.addAction('Press', [{"code":"pointer.Primary"}]);
 inputs.addAction('AltPress', [{"code":"pointer.Secondary","multiplier":1},{"code":"pointer.Double","multiplier":1}]);
 inputs.addAction('Scale', [{"code":"pointer.DeltaPinch"},{"code":"pointer.Wheel"}]);
+inputs.addAction('Escape', [{"code":"keyboard.Escape"}]);
 
     
 styles.new(
@@ -6048,12 +6188,14 @@ templates.templates["Flask"] = {
     }
   }
 
-  this.t += u.time * 10
-  // const sX = u.map(Math.sin(this.t), -1, 1, 0.9, 1.1)
-  // const sY = u.map(Math.cos(this.t), -1, 1, 0.9, 1.1)
+  // this.t += u.time * 10
+  // const scaleOffsetX = 0.1
+  // const scaleOffsetY = 0.2
+  // const sX = u.map(Math.sin(this.t), -1, 1, 1 - scaleOffsetX, 1 + scaleOffsetX)
+  // const sY = u.map(Math.cos(this.t), -1, 1, 1 - scaleOffsetY, 1 + scaleOffsetY)
   // this.flaskContainer.scale.set(sX, sY)
-  const amplitude = 5
-  const frequency = 0.5
+  // const amplitude = 5
+  // const frequency = 0.5
   // const offsetX = u.map(Math.sin(this.t), -1, 1, -amplitude, amplitude)
   // const offsetY = u.map(Math.cos(this.t), -1, 1, -amplitude, amplitude)
   // const offsetX = (Math.random() - 0.5) * 2 * amplitude;
@@ -6075,7 +6217,7 @@ templates.templates["Flask"] = {
 
   const PADDING = 20
   const SCALE = 1.9
-  const { flask, flaskWidth, flaskHeight, cellWidth, cellHeight } = this
+  const { flaskWidth, flaskHeight, cellWidth, cellHeight } = this
   this.liquids = []
 
   this.eventMode = 'static'
@@ -6484,7 +6626,8 @@ this.style = styles.get('ui.text')
 this.eventMode = 'dynamic';
 this.on('pointertap', () => {
     
-rooms.switch('Game')
+    const config = scripts.LEVEL_CONFIGS()[LevelMode.CLASSIC_RANDOM]
+    G.main.startLevel(config)
 
 });
 
@@ -6495,44 +6638,91 @@ rooms.switch('Game')
 };
 templates.list['UI.StartGame'] = [];
         
+templates.templates["UI.Version"] = {
+    name: "UI.Version",
+    depth: 0,
+    blendMode: PIXI.BLEND_MODES.NORMAL,
+    visible: true,
+    baseClass: "Text",
+    
+        defaultText: "",
+    behaviors: JSON.parse('[]'),
+    onStep: function () {
+        
+    },
+    onDraw: function () {
+        
+    },
+    onDestroy: function () {
+        
+    },
+    onCreate: function () {
+        /* template UI.Version — core_OnCreate (On create event) */
+{
+this.text = G.VERSION
+this.style = styles.get('ui.text')
+this.style.fontSize = 32
+}
+
+    },
+    extends: {
+    "cgroup": ""
+}
+};
+templates.list['UI.Version'] = [];
+        
+templates.templates["UI.PopupBackdrop"] = {
+    name: "UI.PopupBackdrop",
+    depth: 0,
+    blendMode: PIXI.BLEND_MODES.NORMAL,
+    visible: true,
+    baseClass: "AnimatedSprite",
+    
+            texture: "white",
+        animationFPS: 30,
+        playAnimationOnStart: false,
+        loopAnimation: true,
+    behaviors: JSON.parse('[]'),
+    onStep: function () {
+        
+    },
+    onDraw: function () {
+        /* template UI.PopupBackdrop — core_OnDraw (On frame end event) */
+{
+
+    const { width, height } = camera
+    if (this.width !== width) this.width = width
+    if (this.height !== height) this.height = height
+}
+
+    },
+    onDestroy: function () {
+        
+    },
+    onCreate: function () {
+        /* template UI.PopupBackdrop — core_OnCreate (On create event) */
+{
+    this.eventMode = 'static'
+    this.zIndex = -10000
+    this.alpha = 0.5
+    this.tint = 0
+}
+
+    },
+    extends: {
+    "cgroup": ""
+}
+};
+templates.list['UI.PopupBackdrop'] = [];
+        
     
     
-rooms.templates['GameplayRoom'] = {
-    name: 'GameplayRoom',
+rooms.templates['Level'] = {
+    name: 'Level',
     width: 1080,
     height: 1080,
     behaviors: JSON.parse('[]'),
     objects: JSON.parse('[{"x":0,"y":0,"opacity":1,"tint":16777215,"scale":{"x":1080,"y":1080},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":5,"y1":5,"x2":95,"y2":95},"alignX":"center","alignY":"center","padding":{"left":0,"top":0,"right":0,"bottom":0}},"template":"Board"}]'),
-    bgs: JSON.parse('[]'),
-    tiles: JSON.parse('[]'),
-    backgroundColor: '#141B25',
-    
-    onStep() {
-        
-    },
-    onDraw() {
-        
-    },
-    onLeave() {
-        
-    },
-    onCreate() {
-        
-    },
-    isUi: true,
-    follow: false,
-    extends: {},
-    bindings: {
-    
-    }
-}
-        
-rooms.templates['MainMenu'] = {
-    name: 'MainMenu',
-    width: 1080,
-    height: 1080,
-    behaviors: JSON.parse('[]'),
-    objects: JSON.parse('[{"x":540,"y":504,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"center","alignY":"center","padding":{"left":0,"top":0,"right":0,"bottom":0}},"customAnchor":{"x":0.5,"y":0.5},"template":"UI.StartGame"}]'),
     bgs: JSON.parse('[]'),
     tiles: JSON.parse('[]'),
     backgroundColor: '#141B25',
@@ -6579,11 +6769,11 @@ rooms.templates['Game'] = {
     onCreate() {
         /* room Game — core_OnRoomStart (On room start event) */
 {
-    rooms.append('GameplayRoom')
-    rooms.append('UI.HUD')
-    const config = scripts.LEVEL_CONFIGS()[LevelMode.CLASSIC_RANDOM]
-    const { volume, flasks: { full, empty }, maxColors } = config
-    G.events.w.add({ [EC.SetBoard]: new Board(volume, full + empty, empty, maxColors) })
+
+    G.ui[Templates.Game] = this
+    G.ui[Templates.HUD] = rooms.prepend('UI.HUD')
+    rooms.prepend('UI.MainMenu')
+    rooms.prepend('UI.PauseMenu')
 }
 
     },
@@ -6630,7 +6820,7 @@ rooms.templates['UI.HUD'] = {
     width: 1080,
     height: 1080,
     behaviors: JSON.parse('[]'),
-    objects: JSON.parse('[{"x":1008,"y":72,"opacity":0.5,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"end","alignY":"start","padding":{"left":0,"top":0,"right":0,"bottom":0}},"customAnchor":{"x":0.5,"y":0.5},"template":"UI.Restart"}]'),
+    objects: JSON.parse('[{"x":1008,"y":72,"opacity":0.5,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"end","alignY":"start","padding":{"left":0,"top":0,"right":0,"bottom":0}},"customAnchor":{"x":0.5,"y":0.5},"template":"UI.Restart"},{"x":1008,"y":1060,"opacity":0.5,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"end","alignY":"end","padding":{"left":0,"top":0,"right":0,"bottom":0}},"customAnchor":{"x":1,"y":1},"template":"UI.Version"}]'),
     bgs: JSON.parse('[]'),
     tiles: JSON.parse('[]'),
     backgroundColor: '#595959',
@@ -6646,6 +6836,80 @@ rooms.templates['UI.HUD'] = {
     },
     onCreate() {
         
+    },
+    isUi: true,
+    follow: false,
+    extends: {},
+    bindings: {
+    
+    }
+}
+        
+rooms.templates['UI.MainMenu'] = {
+    name: 'UI.MainMenu',
+    width: 1080,
+    height: 1080,
+    behaviors: JSON.parse('[]'),
+    objects: JSON.parse('[{"x":540,"y":540,"opacity":1,"tint":"#ffffff","scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"center","alignY":"center","padding":{"left":0,"top":0,"right":0,"bottom":0}},"customAnchor":{"x":0.5,"y":0.5},"template":"UI.StartGame"}]'),
+    bgs: JSON.parse('[]'),
+    tiles: JSON.parse('[]'),
+    backgroundColor: '#A6A6A6',
+    
+    onStep() {
+        
+    },
+    onDraw() {
+        
+    },
+    onLeave() {
+        
+    },
+    onCreate() {
+        /* room UI.MainMenu — core_OnRoomStart (On room start event) */
+{
+
+    this.alpha = 0
+    this.zIndex = 1000
+}
+
+    },
+    isUi: true,
+    follow: false,
+    extends: {},
+    bindings: {
+    
+    }
+}
+        
+rooms.templates['UI.PauseMenu'] = {
+    name: 'UI.PauseMenu',
+    width: 1080,
+    height: 1080,
+    behaviors: JSON.parse('[]'),
+    objects: JSON.parse('[]'),
+    bgs: JSON.parse('[]'),
+    tiles: JSON.parse('[]'),
+    backgroundColor: '#A6A6A6',
+    
+    onStep() {
+        
+    },
+    onDraw() {
+        
+    },
+    onLeave() {
+        
+    },
+    onCreate() {
+        /* room UI.PauseMenu — core_OnRoomStart (On room start event) */
+{
+
+    templates.copyIntoRoom('UI.PopupBackdrop', 0, 0, this)
+
+    this.alpha = 0
+    this.zIndex = 1000
+}
+
     },
     isUi: true,
     follow: false,
@@ -9594,10 +9858,10 @@ var HFSM = class _HFSM {
     }
   }
   executeSyncAction(action) {
-    this.handleActionResult(action(this.context));
+    this.handleActionResult(action(this.context, this.transitionData));
   }
   async executeAsyncAction(action) {
-    this.handleActionResult(await action(this.context));
+    this.handleActionResult(await action(this.context, this.transitionData));
   }
   handleActionResult(result) {
     if (!this.eventABC.has(result)) return;
@@ -9634,8 +9898,9 @@ var HFSM = class _HFSM {
     this.executeActions(transition.onBefore);
     if (!isSameState) {
       this.emit("before-exit" /* BEFORE_EXIT */);
-      this.emit("before-enter" /* BEFORE_ENTER */);
       this.executeOn("onBeforeExit", from);
+      this.executeOn("exit", from);
+      this.emit("before-enter" /* BEFORE_ENTER */);
       this.executeOn("onBeforeEnter", to);
     }
     if (this.child) {
@@ -9644,8 +9909,9 @@ var HFSM = class _HFSM {
     context.state = to;
     if (!isSameState) {
       this.executeOn("onAfterExit", from);
-      this.executeOn("onAfterEnter", to);
       this.emit("after-exit" /* AFTER_EXIT */);
+      this.executeOn("onAfterEnter", to);
+      this.executeOn("entry", to);
       this.emit("after-enter" /* AFTER_ENTER */);
     }
     const newStateConfig = this.getStateConfig(to);
@@ -9654,6 +9920,7 @@ var HFSM = class _HFSM {
       this.child = this.fsmCache[to];
     }
     this.executeActions(transition.onAfter);
+    this.executeActions(transition.on);
     this.emit("after-transition" /* AFTER_TRANSITION */);
   }
   dispatch(event) {
@@ -9719,11 +9986,7 @@ globalThis.fsm = {
 };
 })();
 
-  // let GP
-// window.onGPInit = async (gp) => {
-//   globalThis.GP = gp
-//   await gp.player.ready
-// };
+  ;
 function mod(fn) { return fn() }
 
 const utils = mod(() => {
@@ -10556,6 +10819,19 @@ const ECS = mod(() => {
 
   return { World, Query }
 });
+ function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -10595,24 +10871,16 @@ const ECS = mod(() => {
 
 class Main {
   
-   __init() {this._eventToSystem = new Map}
-   __init2() {this._stateToSystem = new Map()}
+   __init() {this.eventToSystems = {} }
 
-  constructor() {;Main.prototype.__init.call(this);Main.prototype.__init2.call(this);
-    this._systems = Object.entries(scripts)
-      .filter(([name]) => name.endsWith('System'))
-      .map(([, systemConstructor]) => new (systemConstructor()))
-    Object.keys(GameState).filter(([key]) => !isNaN(+key)).forEach(key => this._stateToSystem.set(+key, new Set))
+  constructor() {;Main.prototype.__init.call(this); this.prepareSystems() }
 
-    this._systems.forEach(system => {
-      const map = this._stateToSystem
-      if (!system.STATES) return map.forEach(set => set.add(system))
-      system.STATES.forEach(state => map.get(state).add(system))
-    })
+  init() {
+    this.phase("onInit")
   }
 
   frameStart() {
-    this.callSystems(
+    this.phase(
       "onUpdate",
       "onFlaskSelection",
       "onPouring",
@@ -10623,36 +10891,54 @@ class Main {
   }
 
   frameEnd() {
-    this.callSystems(
+    this.phase(
       "onLateUpdate",
       "onRender",
+      "onUI",
       "onCleanUp",
     )
   }
 
-  roomStart() {
-    this.callSystems("onBeforeStart", "onStart", "onAfterStart")
-  }
-
   roomEnd() {
-    this.callSystems("onEnd")
+    this.phase("onEnd")
   }
 
-   callSystems(...eventNames) {
-    const map = this._eventToSystem
-    for (const eventName of eventNames) {
-      if (!map.has(eventName)) {
-        map.set(eventName,
-          this._systems
-            .filter(system => eventName in system)
-            .sort((a, b) => b.PRIORITY - a.PRIORITY))
-      }
-      map.get(eventName).forEach((system) => {
-        const isInCurrentState = this._stateToSystem.get(G.game.state).has(system)
-        if (!isInCurrentState) return
-        system[eventName]()
-      })
+  startLevel(config) {
+    const { volume, flasks: { full, empty }, maxColors } = config
+    G.events.w.add({ [EC.SetBoard]: new Board(volume, full + empty, empty, maxColors) })
+    this.phase("onBeforeStart", "onStart", "onAfterStart")
+  }
+
+  endLevel() {
+    this.phase("onEnd")
+  }
+
+  emit(event, ...a) {
+    const handlers = this.eventToSystems[event]
+    if (!handlers) return
+    for (const handler of handlers) handler(a[0], a[1], a[2], a[3], a[4])
+  }
+
+   phase(...phases) {
+    for (const phase of phases) {
+      _optionalChain([this, 'access', _ => _.eventToSystems, 'access', _2 => _2[phase], 'optionalAccess', _3 => _3.forEach, 'call', _4 => _4(handler => handler())])
     }
+  }
+   prepareSystems() {
+    this.systems = Object.entries(scripts)
+      .filter(([name]) => name.endsWith('.sys'))
+      .map(([name, systemConstructor]) => ({ ...systemConstructor(), name }))
+      .sort((a, b) => b.PRIORITY - a.PRIORITY)
+
+
+    this.systems.forEach((system) => {
+      Object.entries(system)
+        .filter(([prop]) => prop.startsWith('on'))
+        .forEach(([event, handler]) => {
+          const handlers = _nullishCoalesce(this.eventToSystems[event], () => ( (this.eventToSystems[event] = [])))
+          handlers.push(handler)
+        })
+    })
   }
 }
 
@@ -10667,10 +10953,7 @@ var Priority; (function (Priority) {
 })(Priority || (Priority = {}));
 
 
-class System {constructor() { System.prototype.__init3.call(this);System.prototype.__init4.call(this); }
-  __init3() {this.PRIORITY = 0}
-  __init4() {this.STATES = null}
-};
+const createSystem = ({ PRIORITY = 0, name = '', ...events } = {}) => ({ PRIORITY, name, ...events });
 var MC; (function (MC) {
   const Flask = 'Flask'; MC["Flask"] = Flask;
   const Board = 'Board'; MC["Board"] = Board;
@@ -10717,8 +11000,8 @@ var FlaskState; (function (FlaskState) {
 })(FlaskState || (FlaskState = {}));
 
 var SelectionState; (function (SelectionState) {
-  const Selected = 0; SelectionState[SelectionState["Selected"] = Selected] = "Selected";
-  const NotSelected = Selected + 1; SelectionState[SelectionState["NotSelected"] = NotSelected] = "NotSelected";
+  const Selected = 'Selected'; SelectionState["Selected"] = Selected;
+  const NotSelected = 'NotSelected'; SelectionState["NotSelected"] = NotSelected;
 })(SelectionState || (SelectionState = {}));
 
 class Flask {
@@ -11063,22 +11346,33 @@ const themes = {
 let theme = themes.fruit_mix
 ;
 var GameState; (function (GameState) {
-    const Launch = 0; GameState[GameState["Launch"] = Launch] = "Launch";
-    const Game = Launch + 1; GameState[GameState["Game"] = Game] = "Game";
-    const Pause = Game + 1; GameState[GameState["Pause"] = Pause] = "Pause";
+    const Launching = 'Launching'; GameState["Launching"] = Launching;
+    const MainMenu = 'MainMenu'; GameState["MainMenu"] = MainMenu;
+    const Gameplay = 'Gameplay'; GameState["Gameplay"] = Gameplay;
+    const Paused = 'Paused'; GameState["Paused"] = Paused;
 })(GameState || (GameState = {}));
 
-class GameService extends StateStack {
-    constructor(state = GameState.Game) { super(state) }
-}
+
+
+
 
 class LevelService {constructor() { LevelService.prototype.__init.call(this); }
     __init() {this.board = null}
 }
 ;
+
+
+
+var Templates; (function (Templates) {
+    const MainMenu = 'MainMenu'; Templates["MainMenu"] = MainMenu;
+    const HUD = 'UI.HUD'; Templates["HUD"] = HUD;
+    const Game = 'Game'; Templates["Game"] = Game;
+    const BoardRoom = 'BoardRoom'; Templates["BoardRoom"] = BoardRoom;
+    const PauseMenu = 'UI.PauseMenu'; Templates["PauseMenu"] = PauseMenu;
+})(Templates || (Templates = {}));;
 const G = {
   main: new Main,
-  game: new GameService,
+  game: { state: GameState.Launching } ,
   level: null ,
   model: {
     board: null 
@@ -11092,7 +11386,9 @@ const G = {
   },
   hasEvent(eventQuery) {
     return !!G.events.w.queries[eventQuery].size
-  }
+  },
+  ui: {} ,
+  VERSION: '0.0.1' 
 }
 
 Object.assign(globalThis, { G });
