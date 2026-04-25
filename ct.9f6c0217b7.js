@@ -4313,7 +4313,8 @@ if (!this.kill) {
      * @catnipIgnore
      */
     afterDraw() {
-      for (const p of pointer.down) {
+      keyboard.clear();
+for (const p of pointer.down) {
     p.xprev = p.x;
     p.yprev = p.y;
     p.xuiprev = p.x;
@@ -4328,7 +4329,6 @@ for (const p of pointer.hover) {
 inputs.registry['pointer.Wheel'] = 0;
 pointer.clearReleased();
 pointer.xmovement = pointer.ymovement = 0;
-keyboard.clear();
 
       if (this.behaviors.length) {
         runBehaviors(this, "rooms", "thisOnDraw");
@@ -5117,11 +5117,13 @@ keyboard.clear();
     const { add } = G.events.w
     board.state = BoardState.Unsolved
     add({ [EC.BoardGenerated]: true })
-    board.flasks.forEach(({ id }) => add({ [EC.FlaskUpdated]: id }))
+    for (const entity of G.model.w.queries.flask) {
+      const { orderPosition } = entity[MC.Flask]
+      add({ [EC.FlaskUpdated]: orderPosition })
+    }
   }
 
   function getUnsortedFlasks(board, sortedFlasks) {
-
     const flasks = utils.arrayOf(board.count, (i) => new Flask(i, board.volume))
     const unfilledFlasks = [...flasks]
     const liquids = utils.shuffle(sortedFlasks.flat())
@@ -5144,7 +5146,7 @@ keyboard.clear();
     }
 
     flasks.forEach((flask, id) => {
-      flask.id = id
+      flask.orderPosition = id
       Flask.updateState(flask)
     })
 
@@ -5181,74 +5183,85 @@ keyboard.clear();
   }
 
   return createSystem({
-    onStart() {
-      for (const event of G.events.w.queries.setBoard) {
-        const board = event[EC.SetBoard]
-        const colors = getTypes(board)
-        const sortedFlasks = getSortedFlasks(board, colors)
-        board.flasks = getUnsortedFlasks(board, sortedFlasks)
-        G.model.board = board
+    onStart(config) {
+      const { volume, flasks: { full, empty }, maxColors } = config
+      const board = new Board(volume, full + empty, empty, maxColors)
+      const colors = getTypes(board)
+      const sortedFlasks = getSortedFlasks(board, colors)
+      const flasks = getUnsortedFlasks(board, sortedFlasks)
+      // board.flasks = flasks
+      flasks.forEach(flask => G.model.w.add({ [MC.Flask]: flask }))
+      G.model.w.add({ [MC.Board]: board })
+      G.model.board = board
 
-        emitEvents(board)
-      }
-    }
-  })},'FlaskSelection.sys': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
-  function select(id) {
-    const { board } = G.model
-    const flask = board.flasks[id]
-    if (!flask) return
+      emitEvents(board)
+    },
+  })},'FlaskSelection.sys': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }  function getSelected() { return G.model.w.queries.selectedFlask.first }
 
-    const isSelectable = Flask.isSelectable(flask)
-    if (board.selectedFlask === null && isSelectable) selectFlask(flask)
-    else if (board.selectedFlask === flask) deselectCurrentFlask()
+  function select(id, selected) {
+    const flaskEntity = G.model.w.queries.flask.entity(id)
+
+    if (!flaskEntity) return
+    const flask = flaskEntity[MC.Flask]
+    const isSelectable = Flask.isSelectable(flaskEntity[MC.Flask])
+
+    if (!selected && isSelectable) selectFlask(flaskEntity)
+    else if (!selected && !isSelectable) selectionFailed(flaskEntity)
+    else if (selected === flaskEntity) deselectCurrentFlask()
     else if (flask.stack.length === flask.volume && isSelectable) {
       deselectCurrentFlask()
-      selectFlask(flask)
+      selectFlask(flaskEntity)
     }
-    else tryPour(flask)
+    else tryPour(flaskEntity)
   }
 
-  function tryPour(flask) {
-    G.events.w.add({ [EC.TryPour]: flask.id })
+  function tryPour(entity) {
+    G.events.w.add({ [EC.TryPour]: entity.id })
   }
 
-  function selectFlask(flask) {
-    G.model.board.selectedFlask = flask
-    flask.selection = SelectionState.Selected
-
-    G.events.w.add({ [EC.FlaskSelected]: flask.id, [EC.FlaskUpdated]: flask.id })
+  function selectFlask(entity) {
+    G.model.w.addComponent(entity, MC.IsSelected)
+    entity[MC.Flask].selection = SelectionState.Selected
+    const { id } = entity
+    G.events.w.add({ [EC.FlaskSelected]: id, [EC.FlaskUpdated]: id })
   }
 
   function deselectCurrentFlask() {
-    const { board } = G.model
-    if (board.selectedFlask === null) return
-    const flask = board.selectedFlask
-    board.selectedFlask = null
-    flask.selection = SelectionState.NotSelected
+    const flaskEntity = getSelected()
+    if (!flaskEntity) return
+    G.model.w.removeComponent(flaskEntity, MC.IsSelected)
+    flaskEntity[MC.Flask].selection = SelectionState.NotSelected
+    const { id } = flaskEntity
 
-    G.events.w.add({ [EC.FlaskDeselected]: flask.id, [EC.FlaskUpdated]: flask.id })
+    G.events.w.add({ [EC.FlaskDeselected]: id, [EC.FlaskUpdated]: id })
+  }
+
+  function selectionFailed(entity) {
+    const { id } = entity
+    G.events.w.add({ [EC.FlaskSelectionFailed]: id, [EC.FlaskUpdated]: id })
   }
 
   return createSystem({
     onFlaskSelection() {
-      const { board } = G.model
+      const { board, w } = G.model
       if (_optionalChain([board, 'optionalAccess', _ => _.state]) !== BoardState.Unsolved) return
       const event = G.events.w.queries.flaskClicked.first
       if (!event) return
-      const id = _nullishCoalesce(_optionalChain([event, 'optionalAccess', _2 => _2[EC.FlaskClicked]]), () => ( -1))
-      const clickType = _optionalChain([event, 'optionalAccess', _3 => _3[EC.ClickType]])
-      const isClickedSelected = _optionalChain([board, 'access', _4 => _4.selectedFlask, 'optionalAccess', _5 => _5.id]) === id
+      const id = _nullishCoalesce(event[EC.FlaskClicked], () => ( -1))
+      const clickType = _optionalChain([event, 'optionalAccess', _2 => _2[EC.ClickType]])
+      const selected = getSelected()
+      const isClickedSelected = _optionalChain([selected, 'optionalAccess', _3 => _3.id]) === id
 
       if (clickType === ClickType.Secondary) {
         if (isClickedSelected || id === -1)
           return deselectCurrentFlask()
 
-        const flask = board.flasks[id]
-        if (!Flask.isSelectable(flask)) return
+        const flaskEntity = w.queries.flask.entity(id)
+        if (!Flask.isSelectable(flaskEntity[MC.Flask])) return selectionFailed(flaskEntity)
         deselectCurrentFlask()
-        selectFlask(flask)
+        selectFlask(flaskEntity)
       }
-      else if (clickType === ClickType.Primary) select(id)
+      else if (clickType === ClickType.Primary) select(id, selected)
     },
 
     onAfterPouring() {
@@ -5258,15 +5271,19 @@ keyboard.clear();
     }
   })},'Pouring.sys': function (options) {
   function canPour(from, to) {
-    return to.stack.length < to.volume && (Flask.peak(from) === Flask.peak(to) || to.state === FlaskState.Empty)
+    const { [MC.Flask]: fromFlask } = from
+    const { [MC.Flask]: toFlask } = to
+    return toFlask.stack.length < toFlask.volume && (Flask.peak(fromFlask) === Flask.peak(toFlask) || toFlask.state === FlaskState.Empty)
   }
 
   function pour(from, to) {
-    const startBall = from.stack[from.stack.length - 1]
-    for (let nextBall = startBall; nextBall === startBall && to.stack.length < to.volume;) {
-      const ball = from.stack.pop()
-      to.stack.push(ball)
-      nextBall = from.stack[from.stack.length - 1]
+    const { [MC.Flask]: fromFlask } = from
+    const { [MC.Flask]: toFlask } = to
+    const startBall = fromFlask.stack[fromFlask.stack.length - 1]
+    for (let nextBall = startBall; nextBall === startBall && toFlask.stack.length < toFlask.volume;) {
+      const ball = fromFlask.stack.pop()
+      toFlask.stack.push(ball)
+      nextBall = fromFlask.stack[fromFlask.stack.length - 1]
     }
 
     G.events.w.add({ [EC.Poured]: to.id, [EC.FlaskUpdated]: to.id })
@@ -5274,12 +5291,16 @@ keyboard.clear();
 
   return createSystem({
     onPouring() {
-      const { board } = G.model
+      const { w: { queries } } = G.model
       for (const event of G.events.w.queries.tryPour) {
-        const from = board.selectedFlask
-        const to = board.flasks[event[EC.TryPour]]
+        const from = queries.selectedFlask.first
+        const to = queries.flask.entity(event[EC.TryPour])
         if (!from || !to) continue
-        if (!canPour(from, to)) continue
+        if (!canPour(from, to)) {
+          G.events.w.add({ [EC.PourFailed]: { to: to.id, from: from.id }, [EC.FlaskUpdated]: to.id })
+          G.events.w.add({ [EC.PourFailed]: { to: to.id, from: from.id }, [EC.FlaskUpdated]: from.id })
+          continue
+        }
         pour(from, to)
       }
     }
@@ -5289,17 +5310,19 @@ keyboard.clear();
       const { board } = G.model
       const { add } = G.events.w
       if (_optionalChain([board, 'optionalAccess', _ => _.state]) !== BoardState.Unsolved) return
-      board.flasks.forEach((flask) => {
+
+      for (const entity of G.model.w.queries.flask) {
+        const flask = entity[MC.Flask]
         const isChanged = Flask.updateState(flask)
 
         if (isChanged) {
-          const event = { [EC.FlaskStateChanged]: flask.id, [EC.FlaskUpdated]: flask.id }
-          if (flask.state === FlaskState.Solved) event[EC.FlaskSolved] = flask.id
+          const event = { [EC.FlaskStateChanged]: flask.orderPosition, [EC.FlaskUpdated]: flask.orderPosition }
+          if (flask.state === FlaskState.Solved) event[EC.FlaskSolved] = flask.orderPosition
           add(event)
         }
-      })
+      }
 
-      const areAllFlasksSolved = !board.flasks.find(({ state }) => state !== FlaskState.Solved && state !== FlaskState.Empty)
+      const areAllFlasksSolved = !G.model.w.queries.flask.entities.find(({ [MC.Flask]: { state } }) => state !== FlaskState.Solved && state !== FlaskState.Empty)
       if (areAllFlasksSolved) {
         board.state = BoardState.Solved
         add({ [EC.BoardSolved]: true })
@@ -5331,6 +5354,11 @@ keyboard.clear();
         onUpdate() {
             gameFSM.dispatch(UPDATE)
         }
+    })},'CleanUpModel.sys': function (options) {
+    return createSystem({
+        onEnd() {
+            G.model.w.clear()
+        }
     })},'flask.yTween': function (options) {
     const [flaskContainer] = arguments
     const offset = flaskContainer.height / 2
@@ -5358,7 +5386,9 @@ keyboard.clear();
     const PADDING = 20
 
     function drawLiquidLayers(view) {
-        const model = G.model.board.flasks[view[VC.ModelID]]
+        const modelEntity =G.model.w.queries.flask.entity(view[VC.ModelID])
+        if(!modelEntity) return
+        const model = modelEntity[MC.Flask]
         compareViewAndModel(model)
         syncSpritesWithModel(view)
         placeSprites(view[VC.LiquidLayers], view[VC.Volume])
@@ -5641,8 +5671,9 @@ keyboard.clear();
     function isSolved() { return G.hasEvent('boardSolved') }
     function isRestarting() { return G.hasEvent('restart') }
     function canDrawBoard() {
-        if (!G.model.board) return false
-        return G.model.board.state !== BoardState.Generating
+        const board = G.main.getBoard()
+        if (!board) return false
+        return board[MC.Board].state !== BoardState.Generating
     }
 
     function updateBoard(context) {
@@ -5655,13 +5686,14 @@ keyboard.clear();
         const animations = []
         for (const flaskView of G.view.w.queries.flask) {
             const copy = flaskView[VC.Copy]
-            const model = G.model.board.flasks[flaskView[VC.ModelID]]
-            copy.cursor = 'auto'
+            const count = G.model.w.queries.flask.size
+            const { orderPosition } = G.model.w.queries.flask.entity(flaskView[VC.ModelID])[MC.Flask]
             // Анимация исчезновения
-            const t = u.map(model.id, 0, G.model.board.count - 1, 0, 1)
+            const t = u.map(orderPosition, 0, count - 1, 0, 1)
             const delay = Math.max(1, t * 1000)
             const duration = 500
             animations.push(mod(async () => {
+                copy.cursor = 'auto'
                 await timer.add(delay)
                 await tween.add({
                     obj: copy.alphaFilter,
@@ -5698,13 +5730,13 @@ keyboard.clear();
 
     function drawBoard() {
         rooms.prepend('Level')
-        const { board } = G.model
+        const board = G.main.getBoard()[MC.Board]
         const container = getBoardContainer()
         const
             boardWidth = container.width,
             boardHeight = container.height
         const pointA = { x: 0, y: 0 }, pointB = container.position.clone().set(container.width, container.height)
-        const count = board.flasks.length
+        const count = G.model.w.queries.flask.size
         const rows = Math.ceil(((flaskWidth + H_GAP) * count - H_GAP) / boardWidth)
         const cols = Math.ceil(count / rows) || 1
         const colHeight = rows * flaskHeight + V_GAP * (rows - 1),
@@ -5716,26 +5748,29 @@ keyboard.clear();
             boardLeft = pointA.y + boardHSpace / 2,
             boardRight = pointB.y - boardHSpace / 2
 
-        board.flasks.forEach(async (flask, i) => {
+        for (const flaskEntity of G.model.w.queries.flask) {
+            const flask = flaskEntity[MC.Flask]
+            const i = flask.orderPosition
             const t = u.map(i, 0, board.count - 1, 0, 1)
             const delay = Math.max(1, t * 1000)
-            await timer.add(delay)
-
-            const row = Math.trunc(i / cols)
-            const col = i - row * cols
-            const x = u.map(col, 0, (cols - 1) || 1, boardLeft, boardRight - flaskWidth)
-            const y = u.map(row, 0, (rows - 1) || 1, boardTop, boardBottom - flaskHeight)
-            const viewEntity = G.view.w.add({
-                [VC.IsFlask]: true,
-                [VC.ModelID]: i,
-                [VC.Volume]: flask.volume,
-                [VC.LiquidLayers]: [],
+            timer.add(delay).then(() => {
+                const row = Math.trunc(i / cols)
+                const col = i - row * cols
+                const x = u.map(col, 0, (cols - 1) || 1, boardLeft, boardRight - flaskWidth)
+                const y = u.map(row, 0, (rows - 1) || 1, boardTop, boardBottom - flaskHeight)
+                const viewEntity = G.view.w.add({
+                    [VC.IsFlask]: true,
+                    [VC.ModelID]: flaskEntity.id,
+                    [VC.Volume]: flask.volume,
+                    [VC.LiquidLayers]: [],
+                })
+                const copy = templates.copy('Flask', x, y, { flaskEntity, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity }) 
+                viewEntity[VC.Copy] = copy
+                viewEntity[VC.LiquidContainer] = copy.liquidContainer
+                container.addChild(copy)
             })
-            const copy = templates.copy('Flask', x, y, { flask, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity }) 
-            viewEntity[VC.Copy] = copy
-            viewEntity[VC.LiquidContainer] = copy.liquidContainer
-            container.addChild(copy)
-        })
+        }
+
         for (const flask of G.view.w.queries.flask) {
             G.view.w.addComponent(flask, VC.Remove)
         }
@@ -5756,7 +5791,133 @@ keyboard.clear();
         }
     })
 
-},'Level.sys': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+},'Animation.sys': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+    var AnimationEvent; (function (AnimationEvent) { const UPDATE = 'UPDATE'; AnimationEvent["UPDATE"] = UPDATE; })(AnimationEvent || (AnimationEvent = {}));
+    const { Starting, Playing, Ended } = AnimationState
+    const { UPDATE } = AnimationEvent
+    const ANIMATIONS = scripts['Animations.subsys']()
+    const DEFAULT_FIELDS = { alpha: 1, position: new PIXI.Point, offset: new PIXI.Point, scale: new PIXI.Point(1), angle: 0 }
+    const FIELD_NAMES = Object.keys(DEFAULT_FIELDS)
+    const FIELD_BUFFER = JSON.parse(JSON.stringify(DEFAULT_FIELDS))
+
+    const animationFSM = new fsm.HFSM({
+        states: {
+            [Starting]: { transitions: [{ event: UPDATE, to: Playing, on: [tickAnimation, start] }] },
+            [Playing]: {
+                transitions: [
+                    { event: UPDATE, to: Ended, condition: isTimeOut, on: [tickAnimation, end] },
+                    { event: UPDATE, on: [tickAnimation, update] },
+                ]
+            },
+            [Ended]: {},
+        }
+    })
+
+    function isTimeOut(context) {
+        const timer = G.model.w.entity(context.timer)
+        return !timer
+    }
+
+    function tickAnimation(context) {
+        const timer = G.model.w.entity(context.timer)
+        if (!timer) {
+            context.t = 1
+            return
+        }
+        const { start, duration } = timer[MC.Timer]
+        context.t = u.clamp(0, u.map(G.time.total, start, start + duration, 0, 1), 1)
+    }
+
+    function renderAnimation(context) {
+        // const COUNT = 1
+        // const OFFSET = Math.PI / 2
+        // context.target[VC.Copy].alpha = u.map(Math.sin(context.t * 2 * COUNT * Math.PI + OFFSET), -1, 1, 0, 1)
+    }
+
+    function start(context) { _optionalChain([ANIMATIONS, 'access', _2 => _2[context.name], 'optionalAccess', _3 => _3.start, 'call', _4 => _4(context)]) }
+    function update(context) { _optionalChain([ANIMATIONS, 'access', _5 => _5[context.name], 'optionalAccess', _6 => _6.update, 'call', _7 => _7(context)]) }
+    function end(context) { _optionalChain([ANIMATIONS, 'access', _8 => _8[context.name], 'optionalAccess', _9 => _9.end, 'call', _10 => _10(context)]) }
+
+    function calcFields(fields) {
+        if (fields.alpha) FIELD_BUFFER.alpha += fields.alpha
+        if (fields.angle) FIELD_BUFFER.angle += fields.angle
+        if (fields.position) {
+            FIELD_BUFFER.position.x += fields.position.x
+            FIELD_BUFFER.position.y += fields.position.y
+        }
+        if (fields.scale) {
+            FIELD_BUFFER.scale.x += fields.scale.x
+            FIELD_BUFFER.scale.y += fields.scale.y
+        }
+    }
+
+    function applyFields(viewEntity) {
+        const copy = viewEntity[VC.Copy]
+
+        copy.angle = FIELD_BUFFER.angle
+        copy.x = copy.xstart + FIELD_BUFFER.position.x
+        copy.y = copy.ystart + FIELD_BUFFER.position.y
+        copy.scale.x = FIELD_BUFFER.scale.x
+        copy.scale.y = FIELD_BUFFER.scale.y
+    }
+
+    function resetFieldBuffer() {
+        FIELD_BUFFER.alpha = 1
+        FIELD_BUFFER.angle = 0
+        FIELD_BUFFER.position.x = 0
+        FIELD_BUFFER.position.y = 0
+        FIELD_BUFFER.scale.x = 1
+        FIELD_BUFFER.scale.y = 1
+    }
+
+    return createSystem({
+        onRender() {
+            for (const animation of G.view.w.queries.animation) {
+                animationFSM.context = animation[VC.AnimationData]
+                animationFSM.dispatch(UPDATE)
+            }
+
+            for (const animatedEntity of G.view.w.queries.animated) {
+                animatedEntity[VC.AnimationList].forEach((id, _, list) => {
+                    const animation = G.view.w.entity(id)
+                    if (!animation) return list.delete(id)
+                    calcFields(animation[VC.AnimationData].fields)
+                })
+                applyFields(animatedEntity)
+                resetFieldBuffer()
+            }
+
+
+            for (const animation of G.view.w.queries.animation) {
+                if (animation[VC.AnimationData].state === AnimationState.Ended)
+                    G.view.w.remove(animation)
+            }
+        }
+    })},'Shake.subsys': function (options) {
+    const AMPLITUDE = 5
+    const FREQUIENCY = 2
+
+    const shake = {
+        start(data) {
+            const { fields, other } = data
+            other.xOffset = random.range(-0.5, 0.5)
+            other.yOffset = random.range(-0.5, 0.5)
+            fields.position = new PIXI.Point()
+        },
+        update({ t, fields, other }) {
+            fields.position.x = Math.sin(t * FREQUIENCY * (2 + other.xOffset) * Math.PI) * AMPLITUDE;
+            fields.position.y = Math.cos(t * FREQUIENCY * (2 + other.yOffset) * Math.PI) * AMPLITUDE;
+        },
+        end({ fields }) {
+            fields.position.x = 0
+            fields.position.y = 0
+        }
+    }
+
+    return shake},'Animations.subsys': function (options) {
+    return {
+        [AnimationName.Shake]: scripts['Shake.subsys']()
+    }},'Level.sys': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
   function isViewFaded() {
     return _optionalChain([G, 'access', _ => _.view, 'access', _2 => _2.board, 'optionalAccess', _3 => _3.state]) === BoardViewState.End
   }
@@ -5784,7 +5945,29 @@ keyboard.clear();
             maxColors: 10
         },
     } 
-},
+},'Time.sys': function (options) {
+    function addTime() {
+        G.time.total += u.time
+    }
+
+    function processTimers() {
+        for (const timerEntity of G.model.w.queries.timer) {
+            const timer = timerEntity[MC.Timer]
+            if (timer.start === undefined) timer.start = G.time.total
+            const { start, duration } = timer
+            if (duration === Infinity) continue
+            if (G.time.total - duration >= start) {
+                G.model.w.remove(timerEntity)
+            }
+        }
+    }
+
+    return createSystem({
+        onTime() {
+            addTime()
+            processTimers()
+        }
+    })},
   };
 
   // src/ct.release/errors.ts
@@ -5896,7 +6079,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
     deadPool.length = 0;
   }, 1e3 * 60);
   var meta = [
-    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.1"}
+    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.2"}
   ][0];
   var currentViewMode = "scaleFill";
   var currentHighDPIMode = Boolean([
@@ -6171,20 +6354,23 @@ templates.templates["Flask"] = {
 {
 
   for (const event of G.events.w.queries.flaskUpdated) {
-    if (event[EC.FlaskUpdated] !== this.flask.id) continue
+    if (event[EC.FlaskUpdated] !== this.flaskEntity.id) continue
 
     if (EC.FlaskDeselected in event || EC.FlaskSolved in event) {
       // Анимация отпускания
       this.yTween(0)
+      this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
     }
 
     if (EC.FlaskSelected in event) {
       // Анимация подбирания
-      this.yTween(-64, { curve: tween.easeOutBack })
+      this.yTween(-64)
+      this.scaleTween(1.05, { curve: tween.easeInQuad, duration: 150 })
     }
 
-    if (EC.FlaskSolved in event) {
-      this.cursor = 'auto'
+    if (EC.PourFailed in event || EC.FlaskSelectionFailed in event) {
+      // Анимация отказа
+      G.view.animate(this.viewEntity, { name: AnimationName.Shake, duration: 0.3 })
     }
   }
 
@@ -6194,16 +6380,6 @@ templates.templates["Flask"] = {
   // const sX = u.map(Math.sin(this.t), -1, 1, 1 - scaleOffsetX, 1 + scaleOffsetX)
   // const sY = u.map(Math.cos(this.t), -1, 1, 1 - scaleOffsetY, 1 + scaleOffsetY)
   // this.flaskContainer.scale.set(sX, sY)
-  // const amplitude = 5
-  // const frequency = 0.5
-  // const offsetX = u.map(Math.sin(this.t), -1, 1, -amplitude, amplitude)
-  // const offsetY = u.map(Math.cos(this.t), -1, 1, -amplitude, amplitude)
-  // const offsetX = (Math.random() - 0.5) * 2 * amplitude;
-  // const offsetY = (Math.random() - 0.5) * 2 * amplitude;
-  // const offsetX = Math.sin(this.t * frequency * 2.1 * Math.PI) * amplitude;
-  // const offsetY = Math.cos(this.t * frequency * 2.5 * Math.PI) * amplitude;
-  // this.x = offsetX + this.xstart
-  // this.y = offsetY + this.ystart
 
 }
 
@@ -6281,7 +6457,7 @@ this.on('pointertap', () => {
   let clickType = ClickType.Unknown
   actions.Press.down && (clickType = ClickType.Primary)
   actions.AltPress.down && (clickType = ClickType.Secondary)
-  G.events.w.add({ [EC.FlaskClicked]: this.flask.id, [EC.ClickType]: clickType })
+  G.events.w.add({ [EC.FlaskClicked]: this.flaskEntity.id, [EC.ClickType]: clickType })
 
 
 });
@@ -6290,7 +6466,8 @@ this.eventMode = 'dynamic';
 this.on('pointerover', () => {
     
 
-  if (pointer.type !== 'touch' && this.flask.selection !== SelectionState.Selected && Flask.isSelectable(this.flask)) {
+  const flask = this.flaskEntity[MC.Flask]
+  if (pointer.type !== 'touch' && flask.selection !== SelectionState.Selected && Flask.isSelectable(flask)) {
     this.scaleTween(1.05, { curve: tween.easeOutBack })
   }
 
@@ -6299,8 +6476,8 @@ this.on('pointerover', () => {
 this.eventMode = 'dynamic';
 this.on('pointerout', () => {
     
-
-  if (pointer.type !== 'touch' && this.flask.selection !== SelectionState.Selected && Flask.isSelectable(this.flask)) {
+  const flask = this.flaskEntity[MC.Flask]
+  if (pointer.type !== 'touch' && flask.selection !== SelectionState.Selected && Flask.isSelectable(flask)) {
     this.scaleTween(1, { curve: tween.easeOutBack })
   }
 
@@ -10022,7 +10199,7 @@ const utils = mod(() => {
         result = u.clamp(min, result, max)
       }
       return result
-    }
+    },
   }
 })
 
@@ -10868,7 +11045,6 @@ const ECS = mod(() => {
 
 
 
-
 class Main {
   
    __init() {this.eventToSystems = {} }
@@ -10876,11 +11052,12 @@ class Main {
   constructor() {;Main.prototype.__init.call(this); this.prepareSystems() }
 
   init() {
-    this.phase("onInit")
+    this.emit("onInit")
   }
 
   frameStart() {
     this.phase(
+      "onTime",
       "onUpdate",
       "onFlaskSelection",
       "onPouring",
@@ -10899,24 +11076,32 @@ class Main {
     )
   }
 
-  roomEnd() {
-    this.phase("onEnd")
-  }
-
   startLevel(config) {
     const { volume, flasks: { full, empty }, maxColors } = config
     G.events.w.add({ [EC.SetBoard]: new Board(volume, full + empty, empty, maxColors) })
-    this.phase("onBeforeStart", "onStart", "onAfterStart")
+    this.emit("onBeforeStart", config)
+    this.emit("onStart", config)
+    this.emit("onAfterStart", config)
   }
+
+  // restartLevel(config: LevelConfig) {
+  //   this.emit()
+  // }
 
   endLevel() {
-    this.phase("onEnd")
+    this.emit("onEnd")
   }
 
-  emit(event, ...a) {
+  //#region Utils
+
+  getBoard() { return G.model.w.queries.board.first }
+
+  //#endregion Utils
+
+  emit(event, ...args) {
     const handlers = this.eventToSystems[event]
     if (!handlers) return
-    for (const handler of handlers) handler(a[0], a[1], a[2], a[3], a[4])
+    for (const handler of handlers) handler(...args)
   }
 
    phase(...phases) {
@@ -10924,6 +11109,7 @@ class Main {
       _optionalChain([this, 'access', _ => _.eventToSystems, 'access', _2 => _2[phase], 'optionalAccess', _3 => _3.forEach, 'call', _4 => _4(handler => handler())])
     }
   }
+
    prepareSystems() {
     this.systems = Object.entries(scripts)
       .filter(([name]) => name.endsWith('.sys'))
@@ -10957,7 +11143,14 @@ const createSystem = ({ PRIORITY = 0, name = '', ...events } = {}) => ({ PRIORIT
 var MC; (function (MC) {
   const Flask = 'Flask'; MC["Flask"] = Flask;
   const Board = 'Board'; MC["Board"] = Board;
+  const IsSelected = 'IsSelected'; MC["IsSelected"] = IsSelected;
+
+  const Timer = 'Timer'; MC["Timer"] = Timer;
+  const TimeOut = 'TimeOut'; MC["TimeOut"] = TimeOut;
 })(MC || (MC = {}));
+
+
+
 
 
 
@@ -10968,11 +11161,15 @@ function createModelWorld() {
   return ECS.World.create((w) => {
     const
       flask = w.with(MC.Flask),
-      board = w.with(MC.Board)
+      selectedFlask = flask.with(MC.IsSelected),
+      board = w.with(MC.Board),
+      timer = w.with(MC.Timer),
+      timeOut = timer.with(MC.TimeOut)
 
     return {
-      flask,
-      board
+      board,
+      flask, selectedFlask,
+      timer,/*  timeOut, */
     }
   })
 }
@@ -11008,7 +11205,7 @@ class Flask {
   __init3() {this.state = FlaskState.Empty}
   __init4() {this.selection = SelectionState.NotSelected}
   __init5() {this.stack = []}
-  constructor( id,  volume) {;this.id = id;this.volume = volume;Flask.prototype.__init3.call(this);Flask.prototype.__init4.call(this);Flask.prototype.__init5.call(this); }
+  constructor( orderPosition,  volume) {;this.orderPosition = orderPosition;this.volume = volume;Flask.prototype.__init3.call(this);Flask.prototype.__init4.call(this);Flask.prototype.__init5.call(this); }
 
   static updateState(flask) {
     const { stack, volume, state } = flask
@@ -11050,6 +11247,15 @@ var LevelMode; (function (LevelMode) {
 
 
 
+
+
+
+
+
+
+class TimeService {constructor() { TimeService.prototype.__init6.call(this); }
+  __init6() {this.total = 0}
+}
 ;
 var EC; (function (EC) {
   const SetBoard = 'SetBoard'; EC["SetBoard"] = SetBoard;
@@ -11061,17 +11267,21 @@ var EC; (function (EC) {
   const FlaskSolved = 'FlaskSolved'; EC["FlaskSolved"] = FlaskSolved;
   const FlaskSelected = 'FlaskSelected'; EC["FlaskSelected"] = FlaskSelected;
   const FlaskDeselected = 'FlaskDeselected'; EC["FlaskDeselected"] = FlaskDeselected;
+  const FlaskSelectionFailed = 'FlaskSelectionFailed'; EC["FlaskSelectionFailed"] = FlaskSelectionFailed;
   const FlaskStateChanged = 'FlaskStateChanged'; EC["FlaskStateChanged"] = FlaskStateChanged;
   const FlaskUpdated = 'FlaskUpdated'; EC["FlaskUpdated"] = FlaskUpdated;
 
   const TryPour = 'TryPour'; EC["TryPour"] = TryPour;
   const Poured = 'Poured'; EC["Poured"] = Poured;
+  const PourFailed = 'PourFailed'; EC["PourFailed"] = PourFailed;
 
   const Restart = 'TryRestart'; EC["Restart"] = Restart;
 
   const BoardViewStateChanged = 'BoardViewStateChanged'; EC["BoardViewStateChanged"] = BoardViewStateChanged;
   const BoardViewFadedOut = 'BoardViewFaded'; EC["BoardViewFadedOut"] = BoardViewFadedOut;
 })(EC || (EC = {}));
+
+
 
 
 
@@ -11156,7 +11366,13 @@ var VC; (function (VC) {
   const Remove = 'Remove'; VC["Remove"] = Remove;
   const BoardFadingAnimation = 'BoardFadingAnimation'; VC["BoardFadingAnimation"] = BoardFadingAnimation;
   const IsFaded = 'IsFaded'; VC["IsFaded"] = IsFaded;
+  const Animation = 'Animation'; VC["Animation"] = Animation;
+  const AnimationList = 'AnimationList'; VC["AnimationList"] = AnimationList;
+  const AnimationData = 'AnimationState'; VC["AnimationData"] = AnimationData;
 })(VC || (VC = {}));
+
+
+
 
 
 
@@ -11183,14 +11399,48 @@ const createViewWorld = () => {
       flask = rawFlask.with(VC.LiquidLayers),
       fadedFlask = flask.with(VC.IsFaded),
       copy = w.with(VC.Copy),
-      remove = w.with(VC.Remove)
+      remove = w.with(VC.Remove),
+      animation = w.with(VC.Animation, VC.AnimationData), animated = copy.with(VC.AnimationList)
 
-    return { liquidLayer, flask, fadedFlask, rawFlask, remove, copy }
+    return { liquidLayer, flask, fadedFlask, rawFlask, remove, copy, animated, animation }
   })
+}
+
+class ViewService {constructor() { ViewService.prototype.__init.call(this);ViewService.prototype.__init2.call(this); }
+  __init() {this.w = createViewWorld()}
+  __init2() {this.board = null }
+
+  animate(target, options) {
+    const timer = G.model.w.add({ [MC.Timer]: { duration: options.duration } })
+
+    const animation = G.view.w.add({
+      [VC.Animation]: options,
+      [VC.AnimationData]: { t: 0, timer: timer.id, state: AnimationState.Starting, target, fields: {}, other: {}, ...options },
+    })
+
+    if (!target[VC.AnimationList])
+      G.view.w.addComponent(target, VC.AnimationList, new Set)
+
+    target[VC.AnimationList].add(animation.id)
+  }
 }
 
 
 
+//#region Animation
+
+var AnimationName; (function (AnimationName) {
+  const SineAlpha = 'SineAlpha'; AnimationName["SineAlpha"] = SineAlpha;
+  const Shake = 'Shake'; AnimationName["Shake"] = Shake;
+})(AnimationName || (AnimationName = {}));
+
+
+
+
+
+var AnimationState; (function (AnimationState) { const Starting = 'Starting'; AnimationState["Starting"] = Starting; const Playing = 'Playing'; AnimationState["Playing"] = Playing; const Ended = 'Ended'; AnimationState["Ended"] = Ended; })(AnimationState || (AnimationState = {}));
+
+//#endregion Animation
 
 var LiquidLayerState; (function (LiquidLayerState) { const Empty = 0; LiquidLayerState[LiquidLayerState["Empty"] = Empty] = "Empty"; const Full = Empty + 1; LiquidLayerState[LiquidLayerState["Full"] = Full] = "Full"; const Pouring = Full + 1; LiquidLayerState[LiquidLayerState["Pouring"] = Pouring] = "Pouring"; })(LiquidLayerState || (LiquidLayerState = {}));
 
@@ -11373,22 +11623,21 @@ var Templates; (function (Templates) {
 const G = {
   main: new Main,
   game: { state: GameState.Launching } ,
+  time: new TimeService,
   level: null ,
   model: {
+    w: createModelWorld(),
     board: null 
   },
   events: {
     w: createEventWorld(),
   },
-  view: {
-    w: createViewWorld(),
-    board: null ,
-  },
+  view: new ViewService,
   hasEvent(eventQuery) {
     return !!G.events.w.queries[eventQuery].size
   },
   ui: {} ,
-  VERSION: '0.0.1' 
+  VERSION: '0.0.2' 
 }
 
 Object.assign(globalThis, { G });
