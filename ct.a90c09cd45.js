@@ -174,6 +174,1558 @@
   };
   var timer_default = timerLib;
 
+  // src/ct.release/tilemaps.ts
+  var Tile = class extends PIXI.Sprite {
+  };
+  var TileChunk = class extends PIXI.Container {
+    // pixi.js' Container is a jerk
+  };
+  var Tilemap = class extends PIXI.Container {
+    /**
+     * @param template A template object that contains data about depth
+     * and tile placement. It is usually used by ct.IDE.
+     */
+    constructor(template) {
+      super();
+      this.pixiTiles = [];
+      if (template) {
+        this.zIndex = template.depth;
+        this.tiles = template.tiles.map((tile) => ({
+          ...tile
+        }));
+        if (template.extends) {
+          Object.assign(this, template.extends);
+        }
+        for (let i = 0, l = template.tiles.length; i < l; i++) {
+          const tile = template.tiles[i];
+          const textures = res_default.getTexture(tile.texture);
+          const sprite = new Tile(textures[tile.frame]);
+          sprite.anchor.x = textures[0].defaultAnchor.x;
+          sprite.anchor.y = textures[0].defaultAnchor.y;
+          sprite.shape = textures.shape;
+          sprite.scale.set(tile.scale.x, tile.scale.y);
+          sprite.rotation = tile.rotation;
+          sprite.alpha = tile.opacity;
+          sprite.tint = tile.tint;
+          sprite.x = tile.x;
+          sprite.y = tile.y;
+          this.addChild(sprite);
+          this.pixiTiles.push(sprite);
+          this.tiles[i].sprite = sprite;
+        }
+        if (template.cache) {
+          this.cache();
+        }
+      } else {
+        this.tiles = [];
+      }
+      templates_default.list.TILEMAP.push(this);
+      this.on("destroyed", () => {
+        templates_default.list.TILEMAP.splice(templates_default.list.TILEMAP.indexOf(this), 1);
+      });
+    }
+    /**
+     * Adds a tile to the tilemap. Will throw an error if a tilemap is cached.
+     * @param textureName The name of the texture to use
+     * @param x The horizontal location of the tile
+     * @param y The vertical location of the tile
+     * @param [frame] The frame to pick from the source texture. Defaults to 0.
+     * @returns The created tile
+     */
+    addTile(textureName, x, y, frame = 0) {
+      if (this.cached) {
+        throw new Error("[ct.tiles] Adding tiles to cached tilemaps is forbidden. Create a new tilemap, or add tiles before caching the tilemap.");
+      }
+      const texture = res_default.getTexture(textureName, frame);
+      const sprite = new Tile(texture);
+      sprite.x = x;
+      sprite.y = y;
+      sprite.shape = texture.shape;
+      this.tiles.push({
+        texture: textureName,
+        frame,
+        x,
+        y,
+        width: sprite.width,
+        height: sprite.height,
+        sprite,
+        opacity: 1,
+        rotation: 1,
+        scale: {
+          x: 1,
+          y: 1
+        },
+        tint: 16777215
+      });
+      this.addChild(sprite);
+      this.pixiTiles.push(sprite);
+      return sprite;
+    }
+    /**
+     * Enables caching on this tileset, freezing it and turning it
+     * into a series of bitmap textures. This proides great speed boost,
+     * but prevents further editing.
+     */
+    cache(chunkSize = 1024) {
+      if (this.cached) {
+        throw new Error("[ct.tiles] Attempt to cache an already cached tilemap.");
+      }
+      const bounds = this.getLocalBounds();
+      const cols = Math.ceil(bounds.width / chunkSize), rows = Math.ceil(bounds.height / chunkSize);
+      this.cells = [];
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const cell = new TileChunk();
+          this.cells.push(cell);
+        }
+      }
+      for (let i = 0, l = this.tiles.length; i < l; i++) {
+        const [tile] = this.children, x = Math.floor((tile.x - bounds.x) / chunkSize), y = Math.floor((tile.y - bounds.y) / chunkSize);
+        this.cells[y * cols + x].addChild(tile);
+      }
+      this.removeChildren();
+      for (let i = 0, l = this.cells.length; i < l; i++) {
+        if (this.cells[i].children.length === 0) {
+          this.cells.splice(i, 1);
+          i--;
+          l--;
+          continue;
+        }
+        this.addChild(this.cells[i]);
+        if (settings.pixelart) {
+          this.cells[i].cacheAsBitmapResolution = 1;
+        }
+        this.cells[i].cacheAsBitmap = true;
+      }
+      this.cached = true;
+    }
+    /**
+     * Enables caching on this tileset, freezing it and turning it
+     * into a series of bitmap textures. This proides great speed boost,
+     * but prevents further editing.
+     *
+     * This version packs tiles into rhombus-shaped chunks, and sorts them
+     * from top to bottom. This fixes seam issues for isometric games.
+     */
+    cacheDiamond(chunkSize = 1024) {
+      if (this.cached) {
+        throw new Error("[ct.tiles] Attempt to cache an already cached tilemap.");
+      }
+      this.cells = [];
+      this.diamondCellMap = {};
+      for (let i = 0, l = this.tiles.length; i < l; i++) {
+        const [tile] = this.children;
+        const { x: xNormalized, y: yNormalized } = u_default.rotate(tile.x, tile.y * 2, -45);
+        const x = Math.floor(xNormalized / chunkSize), y = Math.floor(yNormalized / chunkSize), key = `${x}:${y}`;
+        if (!(key in this.diamondCellMap)) {
+          const chunk = new TileChunk();
+          chunk.chunkX = x;
+          chunk.chunkY = y;
+          this.diamondCellMap[key] = chunk;
+          this.cells.push(chunk);
+        }
+        this.diamondCellMap[key].addChild(tile);
+      }
+      this.removeChildren();
+      this.cells.sort((a, b) => {
+        const maxA = Math.max(a.chunkY, a.chunkX), maxB = Math.max(b.chunkY, b.chunkX);
+        if (maxA === maxB) {
+          return b.chunkX - a.chunkX;
+        }
+        return maxA - maxB;
+      });
+      for (let i = 0, l = this.cells.length; i < l; i++) {
+        this.addChild(this.cells[i]);
+        this.cells[i].cacheAsBitmap = true;
+      }
+      this.cached = true;
+    }
+  };
+  var tilemapsLib = {
+    /**
+     * Creates a new tilemap at a specified depth, and adds it to the main room (ct.room).
+     * @param [depth] The depth of a newly created tilemap. Defaults to 0.
+     * @returns {Tilemap} The created tilemap.
+     * @catnipSaveReturn
+     */
+    create(depth = 0) {
+      if (!rooms_default.current) {
+        throw new Error("[emitters.fire] An attempt to create a tilemap before the main room is created.");
+      }
+      const tilemap = new Tilemap();
+      tilemap.zIndex = depth;
+      rooms_default.current.addChild(tilemap);
+      return tilemap;
+    },
+    /**
+     * Adds a tile to the specified tilemap. It is the same as
+     * calling `tilemap.addTile(textureName, x, y, frame).
+     * @param tilemap The tilemap to modify.
+     * @param textureName The name of the texture to use.
+     * @catnipAsset textureName:texture
+     * @param x The horizontal location of the tile.
+     * @param y The vertical location of the tile.
+     * @param frame The frame to pick from the source texture. Defaults to 0.
+     * @returns {PIXI.Sprite} The created tile
+     * @catnipSaveReturn
+     */
+    addTile(tilemap, textureName, x, y, frame = 0) {
+      return tilemap.addTile(textureName, x, y, frame);
+    },
+    /**
+     * Enables caching on this tileset, freezing it and turning it
+     * into a series of bitmap textures. This proides great speed boost,
+     * but prevents further editing.
+     *
+     * This is the same as calling `tilemap.cache();`
+     *
+     * @param tilemap The tilemap which needs to be cached.
+     * @param chunkSize The size of one chunk.
+     */
+    cache(tilemap, chunkSize) {
+      tilemap.cache(chunkSize);
+    },
+    /**
+     * Enables caching on this tileset, freezing it and turning it
+     * into a series of bitmap textures. This proides great speed boost,
+     * but prevents further editing.
+     *
+     * This version packs tiles into rhombus-shaped chunks, and sorts them
+     * from top to bottom. This fixes seam issues for isometric games.
+     * Note that tiles should be placed on a flat plane for the proper sorting.
+     * If you need an effect of elevation, consider shifting each tile with
+     * tile.pivot.y property.
+     *
+     * This is the same as calling `tilemap.cacheDiamond();`
+     *
+     * @param tilemap The tilemap which needs to be cached.
+     * @param chunkSize The size of one chunk.
+     */
+    cacheDiamond(tilemap, chunkSize) {
+      tilemap.cacheDiamond(chunkSize);
+    }
+  };
+  var tilemaps_default = tilemapsLib;
+
+  // src/ct.release/behaviors.ts
+  var behaviorsLib = {
+    /**
+     * @catnipIgnore
+     */
+    templates: [
+      {}
+    ][0],
+    /**
+     * @catnipIgnore
+     */
+    rooms: [
+      {'ECS': {
+            'thisOnStep': function () {
+            /* 🐱👉 behavior ECS — On frame start event (core_OnStep) */
+{
+G.main.frameStart()
+}
+
+            },
+'thisOnCreate': function () {
+            /* 🐱👉 behavior ECS — On room start event (core_OnRoomStart) */
+{
+G.main.init()
+}
+
+            },
+'thisOnDraw': function () {
+            /* 🐱👉 behavior ECS — On frame end event (core_OnDraw) */
+{
+G.main.frameEnd()
+}
+
+            }
+        }}
+    ][0],
+    /**
+     * Adds a behavior to the given room or template.
+     * Only dynamic behaviors can be added.
+     * (Static behaviors are marked with a frozen (❄️) sign in UI.)
+     * @param target The room or template to which the behavior should be added.
+     * @param behavior The name of the behavior to be added, as it was named in ct.IDE.
+     * @catnipAsset behavior:behavior
+     */
+    add(target, behavior) {
+      if (target.behaviors.includes(behavior)) {
+        throw new Error(`[behaviors.add] Behavior ${behavior} already exists on ${target instanceof Room ? target.name : target.template}`);
+      }
+      const domain = target instanceof Room ? "rooms" : "templates";
+      const bh = behaviorsLib[domain][behavior];
+      if (bh === "static") {
+        throw new Error(`[behaviors.add] Behavior ${behavior} cannot be added to ${target instanceof Room ? target.name : target.template} because this behavior cannot be added dynamically.`);
+      }
+      if (!bh) {
+        throw new Error(`[behaviors.add] Behavior ${behavior} does not exist or cannot be applied to ${domain}.`);
+      }
+      target.behaviors.push(behavior);
+      if (bh.thisOnAdded) {
+        bh.thisOnAdded.apply(target);
+      }
+    },
+    /**
+     * Removes a behavior from the given room or template.
+     * Only dynamic behaviors can be removed.
+     * (Static behaviors are marked with a frozen (❄️) sign in UI.)
+     * @param target The room or template from which the behavior should be removed.
+     * @param behavior The name of the behavior to be removed, as it was named in ct.IDE.
+     * @catnipAsset behavior:behavior
+     */
+    remove(target, behavior) {
+      if (!target.behaviors.includes(behavior)) {
+        throw new Error(`[behaviors.remove] Behavior ${behavior} already exists on ${target instanceof Room ? target.name : target.template}`);
+      }
+      const domain = target instanceof Room ? "rooms" : "templates";
+      const bh = behaviorsLib[domain][behavior];
+      if (bh === "static") {
+        throw new Error(`[behaviors.remove] Behavior ${behavior} cannot be removed from ${target instanceof Room ? target.name : target.template} because this behavior cannot be removed dynamically.`);
+      }
+      if (!bh) {
+        throw new Error(`[behaviors.remove] Behavior ${behavior} does not exist or cannot be applied to ${domain}.`);
+      }
+      if (bh.thisOnRemoved) {
+        bh.thisOnRemoved.apply(target);
+      }
+      target.behaviors.splice(target.behaviors.indexOf(behavior), 1);
+    },
+    /**
+     * Tells whether the specified object has a behavior applied to it.
+     * @param target A room or a copy to test against.
+     * @param behavior The behavior to look for.
+     * @catnipAsset behavior:behavior
+     */
+    has(target, behavior) {
+      return target.behaviors.includes(behavior);
+    }
+  };
+  var runBehaviors = (target, domain, kind) => {
+    for (const bh of target.behaviors) {
+      const fn = behaviorsLib[domain][bh];
+      if (fn === "static" || !fn) {
+        continue;
+      }
+      fn[kind]?.apply(target);
+    }
+  };
+  var behaviors_default = behaviorsLib;
+
+  // src/ct.release/styles.ts
+  var stylesLib = {
+    /**
+     * @catnipIgnore
+     */
+    types: {},
+    /**
+     * Creates a new style with a given name.
+     * Technically, it just writes `data` to `styles.types`
+     * @catnipIgnore
+     */
+    new(name, styleTemplate) {
+      stylesLib.types[name] = styleTemplate;
+      return styleTemplate;
+    },
+    /**
+     * Returns a style of a given name. The actual behavior strongly depends on `copy` parameter.
+     * @param name The name of the style to load
+     * @catnipAsset name:style
+     * @param [copy] If not set, returns the source style object.
+     * Editing it will affect all new style calls.
+     * When set to `true`, will create a new object, which you can safely modify
+     * without affecting the source style.
+     * When set to an object, this will create a new object as well,
+     * augmenting it with given properties.
+     * @returns {object} The resulting style
+     */
+    get(name, copy) {
+      if (copy === true) {
+        return Object.assign({}, stylesLib.types[name]);
+      }
+      if (copy) {
+        return Object.assign(Object.assign({}, stylesLib.types[name]), copy);
+      }
+      return stylesLib.types[name];
+    }
+  };
+  var styles_default = stylesLib;
+
+  // src/ct.release/templateBaseClasses/PixiButton.ts
+  var PixiButton = class extends PIXI.Container {
+    #disabled;
+    get disabled() {
+      return this.#disabled;
+    }
+    set disabled(val) {
+      this.#disabled = val;
+      if (val) {
+        this.panel.texture = this.disabledTexture;
+        this.eventMode = "none";
+      } else {
+        this.panel.texture = this.normalTexture;
+        this.eventMode = "dynamic";
+      }
+    }
+    get text() {
+      return this.textLabel.text;
+    }
+    set text(val) {
+      this.textLabel.text = val;
+    }
+    /**
+     * The color of the button's texture.
+     */
+    get tint() {
+      return this.panel.tint;
+    }
+    set tint(val) {
+      this.panel.tint = val;
+    }
+    constructor(t, exts) {
+      if (t?.baseClass !== "Button") {
+        throw new Error("Don't call PixiButton class directly! Use templates.copy to create an instance instead.");
+      }
+      super();
+      this.normalTexture = res_default.getTexture(t.texture, 0);
+      this.hoverTexture = t.hoverTexture ? res_default.getTexture(t.hoverTexture, 0) : this.normalTexture;
+      this.pressedTexture = t.pressedTexture ? res_default.getTexture(t.pressedTexture, 0) : this.normalTexture;
+      this.disabledTexture = t.disabledTexture ? res_default.getTexture(t.disabledTexture, 0) : this.normalTexture;
+      this.panel = new PIXI.NineSlicePlane(
+        this.normalTexture,
+        t.nineSliceSettings?.left ?? 16,
+        t.nineSliceSettings?.top ?? 16,
+        t.nineSliceSettings?.right ?? 16,
+        t.nineSliceSettings?.bottom ?? 16
+      );
+      const style = t.textStyle === -1 ? PIXI.TextStyle.defaultStyle : styles_default.get(t.textStyle, true);
+      if (exts.customSize) {
+        style.fontSize = Number(exts.customSize);
+      }
+      if (t.useBitmapText) {
+        this.textLabel = new PIXI.BitmapText(exts.customText || t.defaultText || "", {
+          ...style,
+          fontSize: Number(style.fontSize),
+          fontName: style.fontFamily.split(",")[0].trim()
+        });
+        this.textLabel.tint = new PIXI.Color(style.fill);
+      } else {
+        this.textLabel = new PIXI.Text(exts.customText || t.defaultText || "", style);
+      }
+      this.textLabel.anchor.set(0.5);
+      this.addChild(this.panel, this.textLabel);
+      this.eventMode = "dynamic";
+      this.cursor = "pointer";
+      this.on("pointerenter", this.hover);
+      this.on("pointerentercapture", this.hover);
+      this.on("pointerleave", this.blur);
+      this.on("pointerleavecapture", this.blur);
+      this.on("pointerdown", this.press);
+      this.on("pointerdowncapture", this.press);
+      this.on("pointerup", this.hover);
+      this.on("pointerupcapture", this.hover);
+      this.on("pointerupoutside", this.blur);
+      this.on("pointerupoutsidecapture", this.blur);
+      this.updateNineSliceShape = t.nineSliceSettings.autoUpdate;
+      let baseWidth = this.panel.width, baseHeight = this.panel.height;
+      if ("scaleX" in exts) {
+        baseWidth *= exts.scaleX;
+      }
+      if ("scaleY" in exts) {
+        baseHeight *= exts.scaleY;
+      }
+      this.resize(baseWidth, baseHeight);
+      u_default.reshapeNinePatch(this);
+    }
+    unsize() {
+      const { x, y } = this.scale;
+      this.panel.scale.x *= x;
+      this.panel.scale.y *= y;
+      this.scale.set(1);
+      this.textLabel.x = this.panel.width / 2;
+      this.textLabel.y = this.panel.height / 2;
+    }
+    resize(newWidth, newHeight) {
+      this.panel.width = newWidth;
+      this.panel.height = newHeight;
+      this.textLabel.x = newWidth / 2;
+      this.textLabel.y = newHeight / 2;
+    }
+    hover() {
+      if (this.disabled) {
+        return;
+      }
+      this.panel.texture = this.hoverTexture;
+    }
+    blur() {
+      if (this.disabled) {
+        return;
+      }
+      this.panel.texture = this.normalTexture;
+    }
+    press() {
+      if (this.disabled) {
+        return;
+      }
+      this.panel.texture = this.pressedTexture;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/PixiSpritedCounter.ts
+  var PixiSpritedCounter = class extends PIXI.TilingSprite {
+    #count;
+    #baseWidth;
+    #baseHeight;
+    /**
+     * Amount of sprites to show.
+     */
+    get count() {
+      return this.#count;
+    }
+    set count(val) {
+      this.#count = val;
+      this.width = this.#count * this.#baseWidth * this.scale.x;
+      this.height = this.#baseHeight * this.scale.y;
+      this.tileScale.set(this.scale.x, this.scale.y);
+      this.shape = {
+        type: "rect",
+        left: 0,
+        top: 0,
+        right: this.#baseWidth * this.#count,
+        bottom: this.#baseHeight
+      };
+    }
+    constructor(t, exts) {
+      if (t.baseClass !== "SpritedCounter") {
+        throw new Error("Don't call PixiScrollingTexture class directly! Use templates.copy to create an instance instead.");
+      }
+      const tex = res_default.getTexture(t.texture, 0);
+      super(tex, tex.width, tex.height);
+      this.#baseWidth = this.width;
+      this.#baseHeight = this.height;
+      this.anchor.set(0);
+      if ("scaleX" in exts) {
+        this.scale.x = exts.scaleX ?? 1;
+      }
+      if ("scaleY" in exts) {
+        this.scale.y = exts.scaleY ?? 1;
+      }
+      this.count = t.spriteCount;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/PixiScrollingTexture.ts
+  var PixiScrollingTexture = class extends PIXI.TilingSprite {
+    constructor(t, exts) {
+      if (t.baseClass !== "RepeatingTexture") {
+        throw new Error("Don't call PixiScrollingTexture class directly! Use templates.copy to create an instance instead.");
+      }
+      const tex = res_default.getTexture(t.texture, 0);
+      super(tex, tex.width, tex.height);
+      this.scrollX = 0;
+      this.scrollY = 0;
+      this.#baseWidth = this.width;
+      this.#baseHeight = this.height;
+      this.anchor.set(0);
+      this.scrollSpeedX = t.scrollX;
+      this.scrollSpeedY = t.scrollY;
+      this.pixelPerfect = Boolean(t.pixelPerfect);
+      if ("scaleX" in exts) {
+        this.width = this.#baseWidth * (exts.scaleX ?? 1);
+      }
+      if ("scaleY" in exts) {
+        this.height = this.#baseHeight * (exts.scaleY ?? 1);
+      }
+      this.on("added", () => {
+        rooms_default.current.tickerSet.add(this);
+      });
+      this.on("removed", () => {
+        rooms_default.current.tickerSet.delete(this);
+      });
+      this.shape = {
+        type: "rect",
+        left: 0,
+        top: 0,
+        right: this.width,
+        bottom: this.height
+      };
+    }
+    #baseWidth;
+    #baseHeight;
+    tick() {
+      if (this.isUi) {
+        this.scrollX += this.scrollSpeedX * u_default.timeUi;
+        this.scrollY += this.scrollSpeedY * u_default.timeUi;
+      } else {
+        this.scrollX += this.scrollSpeedX * u_default.time;
+        this.scrollY += this.scrollSpeedY * u_default.time;
+      }
+      if (this.pixelPerfect) {
+        this.tilePosition.x = Math.round(this.scrollX);
+        this.tilePosition.y = Math.round(this.scrollY);
+      } else {
+        this.tilePosition.x = this.scrollX;
+        this.tilePosition.y = this.scrollY;
+      }
+      this.tilePosition.x %= this.texture.width;
+      this.tilePosition.y %= this.texture.height;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/PixiTextBox.ts
+  var cssStyle = document.createElement("style");
+  document.head.appendChild(cssStyle);
+  var PixiTextBox = class extends PIXI.Container {
+    // eslint-disable-next-line max-lines-per-function, complexity
+    constructor(t, exts) {
+      if (t?.baseClass !== "TextBox") {
+        throw new Error("Don't call PixiTextBox class directly! Use templates.copy to create an instance instead.");
+      }
+      super();
+      // eslint-disable-next-line no-empty-function, class-methods-use-this
+      this.onchange = () => {
+      };
+      // eslint-disable-next-line no-empty-function, class-methods-use-this
+      this.oninput = () => {
+      };
+      this.#pointerUp = (e) => {
+        if (e.target !== this) {
+          this.blur();
+        }
+      };
+      this.#submitHandler = (e) => {
+        if (e.key === "Enter" && this.#focused) {
+          this.#setFocused(false);
+          e.preventDefault();
+        }
+      };
+      this.#repositionRestyleInput = () => {
+        const { isUi } = this.getRoom();
+        const x1 = this.x, y1 = this.y, x2 = this.x + this.width, y2 = this.y + this.height;
+        const scalar = isUi ? u_default.uiToCssScalar : u_default.gameToCssScalar, coord = isUi ? u_default.uiToCssCoord : u_default.gameToCssCoord;
+        const lt = coord(x1, y1), br = coord(x2, y2);
+        const textStyle = this.style;
+        Object.assign(this.#htmlInput.style, {
+          fontFamily: textStyle.fontFamily,
+          fontSize: scalar(textStyle.fontSize) + "px",
+          left: lt.x + "px",
+          top: lt.y + "px",
+          width: br.x - lt.x + "px",
+          height: br.y - lt.y + "px",
+          lineHeight: br.y - lt.y + "px",
+          color: Array.isArray(textStyle.fill) ? textStyle.fill[0] : textStyle.fill
+        });
+        if (textStyle.strokeThickness) {
+          this.#htmlInput.style.textStroke = `${scalar(textStyle.strokeThickness / 2)}px ${textStyle.stroke}`;
+          this.#htmlInput.style.webkitTextStroke = this.#htmlInput.style.textStroke;
+        } else {
+          this.#htmlInput.style.textStroke = this.#htmlInput.style.webkitTextStroke = "unset";
+        }
+        if ("dropShadow" in textStyle) {
+          const angle = u_default.radToDeg(textStyle.dropShadowAngle ?? 0);
+          let x = u_default.ldx(textStyle.dropShadowDistance ?? 0, angle), y = u_default.ldy(textStyle.dropShadowDistance ?? 0, angle);
+          x = scalar(x);
+          y = scalar(y);
+          const css = `${x}px ${y}px ${scalar(textStyle.dropShadowBlur ?? 0)}px ${textStyle.dropShadowColor}`;
+          this.#htmlInput.style.textShadow = `${css}, ${css}`;
+        }
+        if (this.selectionColor) {
+          cssStyle.innerHTML = `
+                ::selection {
+                    background: ${this.selectionColor};
+                }
+            `;
+        } else {
+          cssStyle.innerHTML = "";
+        }
+      };
+      forceDestroy.add(this);
+      this.normalTexture = res_default.getTexture(t.texture, 0);
+      this.hoverTexture = t.hoverTexture ? res_default.getTexture(t.hoverTexture, 0) : this.normalTexture;
+      this.pressedTexture = t.pressedTexture ? res_default.getTexture(t.pressedTexture, 0) : this.normalTexture;
+      this.disabledTexture = t.disabledTexture ? res_default.getTexture(t.disabledTexture, 0) : this.normalTexture;
+      this.panel = new PIXI.NineSlicePlane(
+        this.normalTexture,
+        t.nineSliceSettings?.left ?? 16,
+        t.nineSliceSettings?.top ?? 16,
+        t.nineSliceSettings?.right ?? 16,
+        t.nineSliceSettings?.bottom ?? 16
+      );
+      this.maxLength = t.maxTextLength ?? 0;
+      this.fieldType = t.fieldType ?? "text";
+      const style = t.textStyle === -1 ? PIXI.TextStyle.defaultStyle : styles_default.get(t.textStyle, true);
+      if (exts.customSize) {
+        style.fontSize = Number(exts.customSize);
+      }
+      let text = exts.customText || t.defaultText || "";
+      this.#text = text;
+      if (this.fieldType === "password") {
+        text = "\u2022".repeat(text.length);
+      }
+      this.style = {
+        ...style,
+        fontSize: Number(style.fontSize),
+        fontName: style.fontFamily.split(",")[0].trim()
+      };
+      if (t.useBitmapText) {
+        this.textLabel = new PIXI.BitmapText(exts.customText || t.defaultText || "", this.style);
+        this.textLabel.tint = new PIXI.Color(style.fill);
+      } else {
+        this.textLabel = new PIXI.Text(exts.customText || t.defaultText || "", this.style);
+      }
+      this.textLabel.anchor.set(0.5);
+      this.addChild(this.panel, this.textLabel);
+      if (t.selectionColor) {
+        this.selectionColor = t.selectionColor;
+      }
+      this.eventMode = "dynamic";
+      this.cursor = "pointer";
+      this.on("pointerenter", this.hover);
+      this.on("pointerentercapture", this.hover);
+      this.on("pointerleave", this.unhover);
+      this.on("pointerleavecapture", this.unhover);
+      this.on("pointerdown", this.press);
+      this.on("pointerdowncapture", this.press);
+      this.on("pointerup", this.hover);
+      this.on("pointerupcapture", this.hover);
+      this.on("pointerupoutside", this.unhover);
+      this.on("pointerupoutsidecapture", this.unhover);
+      this.updateNineSliceShape = t.nineSliceSettings.autoUpdate;
+      let baseWidth = this.panel.width, baseHeight = this.panel.height;
+      if ("scaleX" in exts) {
+        baseWidth *= exts.scaleX;
+      }
+      if ("scaleY" in exts) {
+        baseHeight *= exts.scaleY;
+      }
+      this.resize(baseWidth, baseHeight);
+      u_default.reshapeNinePatch(this);
+      this.#disabled = false;
+      this.#focused = false;
+      this.#htmlInput = document.createElement("input");
+      this.#htmlInput.type = "text";
+      this.#htmlInput.className = "aCtJsTextboxInput";
+      this.#htmlInput.addEventListener("click", (e) => {
+        e.stopPropagation();
+      });
+      this.#htmlInput.addEventListener("pointerup", (e) => {
+        e.stopPropagation();
+      });
+      this.#htmlInput.addEventListener("input", () => {
+        this.oninput(this.#htmlInput.value);
+      });
+      this.#htmlInput.addEventListener("blur", () => {
+        this.#setFocused(false);
+      });
+      this.on("pointerup", () => {
+        this.#setFocused(true);
+      });
+    }
+    #disabled;
+    get disabled() {
+      return this.#disabled;
+    }
+    set disabled(val) {
+      this.#disabled = val;
+      if (val) {
+        this.panel.texture = this.disabledTexture;
+        this.eventMode = "none";
+      } else {
+        this.panel.texture = this.normalTexture;
+        this.eventMode = "auto";
+      }
+    }
+    #focused;
+    #prevPreventDefault;
+    get isFocused() {
+      return this.#focused;
+    }
+    #setFocused(val) {
+      if (val === this.#focused) {
+        return;
+      }
+      this.#focused = val;
+      if (val) {
+        if (this.#disabled) {
+          this.#focused = false;
+          return;
+        }
+        setFocusedElement(this);
+        this.panel.texture = this.pressedTexture ?? this.hoverTexture ?? this.normalTexture;
+        this.#repositionRestyleInput();
+        if (this.maxLength > 0) {
+          this.#htmlInput.maxLength = this.maxLength;
+        } else {
+          this.#htmlInput.maxLength = 524288;
+        }
+        this.#htmlInput.type = this.fieldType || "text";
+        this.#htmlInput.value = this.text;
+        document.body.appendChild(this.#htmlInput);
+        this.#htmlInput.focus();
+        this.textLabel.alpha = 0;
+        try {
+          this.#prevPreventDefault = settings.preventDefault;
+          settings.preventDefault = false;
+        } catch (oO) {
+          void oO;
+        }
+        document.addEventListener("keydown", this.#submitHandler);
+        window.addEventListener("resize", this.#repositionRestyleInput);
+        pixiApp.stage.off("pointerup", this.#pointerUp);
+      } else {
+        this.panel.texture = this.normalTexture;
+        this.text = this.#htmlInput.value;
+        document.body.removeChild(this.#htmlInput);
+        this.textLabel.alpha = 1;
+        try {
+          settings.preventDefault = this.#prevPreventDefault;
+        } catch (oO) {
+          void oO;
+        }
+        this.onchange(this.text);
+        document.removeEventListener("keydown", this.#submitHandler);
+        window.removeEventListener("resize", this.#repositionRestyleInput);
+        pixiApp.stage.on("pointerup", this.#pointerUp);
+      }
+    }
+    blur() {
+      this.#setFocused(false);
+    }
+    focus() {
+      this.#setFocused(true);
+    }
+    #htmlInput;
+    #pointerUp;
+    #submitHandler;
+    #repositionRestyleInput;
+    #text;
+    get text() {
+      return this.#text;
+    }
+    set text(val) {
+      this.#text = val;
+      if (this.fieldType === "password") {
+        this.textLabel.text = "\u2022".repeat(val.length);
+      } else {
+        this.textLabel.text = val;
+      }
+    }
+    destroy(options) {
+      forceDestroy.delete(this);
+      if (this.#focused) {
+        this.#setFocused(false);
+      }
+      super.destroy(options);
+    }
+    unsize() {
+      const { x, y } = this.scale;
+      this.panel.scale.x *= x;
+      this.panel.scale.y *= y;
+      this.scale.set(1);
+      this.textLabel.x = this.panel.width / 2;
+      this.textLabel.y = this.panel.height / 2;
+    }
+    resize(newWidth, newHeight) {
+      this.panel.width = newWidth;
+      this.panel.height = newHeight;
+      this.textLabel.x = newWidth / 2;
+      this.textLabel.y = newHeight / 2;
+    }
+    hover() {
+      if (this.disabled) {
+        return;
+      }
+      this.panel.texture = this.hoverTexture;
+    }
+    unhover() {
+      if (this.disabled) {
+        return;
+      }
+      this.panel.texture = this.normalTexture;
+    }
+    press() {
+      if (this.disabled) {
+        return;
+      }
+      this.panel.texture = this.pressedTexture;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/PixiNineSlicePlane.ts
+  var PixiPanel = class extends PIXI.NineSlicePlane {
+    constructor(t, exts) {
+      if (t?.baseClass !== "NineSlicePlane") {
+        throw new Error("Don't call PixiPanel class directly! Use templates.copy to create an instance instead.");
+      }
+      const tex = res_default.getTexture(t.texture, 0);
+      super(
+        tex,
+        t.nineSliceSettings?.left ?? 16,
+        t.nineSliceSettings?.top ?? 16,
+        t.nineSliceSettings?.right ?? 16,
+        t.nineSliceSettings?.bottom ?? 16
+      );
+      this.baseClass = "NineSlicePlane";
+      this.updateNineSliceShape = t.nineSliceSettings.autoUpdate;
+      const baseWidth = this.width, baseHeight = this.height;
+      if ("scaleX" in exts) {
+        this.width = baseWidth * exts.scaleX;
+      }
+      if ("scaleY" in exts) {
+        this.height = baseHeight * exts.scaleY;
+      }
+      u_default.reshapeNinePatch(this);
+      this.blendMode = t.blendMode || PIXI.BLEND_MODES.NORMAL;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/PixiText.ts
+  var PixiText = class extends PIXI.Text {
+    constructor(t, exts) {
+      if (t?.baseClass !== "Text") {
+        throw new Error("Don't call PixiText class directly! Use templates.copy to create an instance instead.");
+      }
+      let style;
+      if (t.textStyle && t.textStyle !== -1) {
+        style = styles_default.get(t.textStyle, true);
+      } else {
+        style = {};
+      }
+      if (exts.customWordWrap) {
+        style.wordWrap = true;
+        style.wordWrapWidth = Number(exts.customWordWrap);
+      }
+      if (exts.customSize) {
+        style.fontSize = Number(exts.customSize);
+      }
+      super(
+        exts.customText || t.defaultText || "",
+        style
+      );
+      if (exts.customAnchor) {
+        const anchor = exts.customAnchor;
+        this.anchor.set(anchor?.x ?? 0, anchor?.y ?? 0);
+      }
+      this.shape = u_default.getRectShape(this);
+      this.scale.set(
+        exts.scaleX ?? 1,
+        exts.scaleY ?? 1
+      );
+      return this;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/PixiBitmapText.ts
+  var PixiBitmapText = class extends PIXI.BitmapText {
+    constructor(t, exts) {
+      if (t?.baseClass !== "BitmapText") {
+        throw new Error("Don't call PixiBitmapText class directly! Use templates.copy to create an instance instead.");
+      }
+      let style;
+      if (t.textStyle && t.textStyle !== -1) {
+        style = styles_default.get(t.textStyle, true);
+      } else {
+        style = {};
+      }
+      if (exts.customWordWrap) {
+        style.wordWrap = true;
+        style.wordWrapWidth = Number(exts.customWordWrap);
+      }
+      if (exts.customSize) {
+        style.fontSize = Number(exts.customSize);
+      }
+      super(
+        exts.customText || t.defaultText || "",
+        {
+          ...style,
+          fontName: style.fontFamily.split(",")[0].trim(),
+          tint: new PIXI.Color(style.fill)
+        }
+      );
+      this.tint = new PIXI.Color(style.fill);
+      if (exts.customAnchor) {
+        const anchor = exts.customAnchor;
+        this.anchor.set(anchor?.x ?? 0, anchor?.y ?? 0);
+      }
+      this.shape = u_default.getRectShape(this);
+      this.scale.set(
+        exts.scaleX ?? 1,
+        exts.scaleY ?? 1
+      );
+      return this;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/PixiContainer.ts
+  var PixiContainer = class extends PIXI.Container {
+    constructor() {
+      super();
+      this.shape = {
+        type: "point"
+      };
+      return this;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/PixiAnimatedSprite.ts
+  var PixiAnimateSprite = class extends PIXI.AnimatedSprite {
+    constructor(t, exts) {
+      if (t?.baseClass !== "AnimatedSprite") {
+        throw new Error("Don't call PixiButton class directly! Use templates.copy to create an instance instead.");
+      }
+      const textures = res_default.getTexture(t.texture);
+      super(textures);
+      this.anchor.x = t.anchorX ?? textures[0].defaultAnchor.x ?? 0;
+      this.anchor.y = t.anchorY ?? textures[0].defaultAnchor.y ?? 0;
+      this.scale.set(
+        exts.scaleX ?? 1,
+        exts.scaleY ?? 1
+      );
+      this.blendMode = t.blendMode || PIXI.BLEND_MODES.NORMAL;
+      this.loop = t.loopAnimation;
+      this.animationSpeed = t.animationFPS / 60;
+      if (t.playAnimationOnStart) {
+        this.play();
+      }
+      return this;
+    }
+  };
+
+  // src/ct.release/templateBaseClasses/index.ts
+  var baseClassToPixiClass = {
+    AnimatedSprite: PixiAnimateSprite,
+    Button: PixiButton,
+    Container: PixiContainer,
+    NineSlicePlane: PixiPanel,
+    RepeatingTexture: PixiScrollingTexture,
+    // ScrollBox: PixiScrollBox,
+    SpritedCounter: PixiSpritedCounter,
+    Text: PixiText,
+    BitmapText: PixiBitmapText,
+    TextBox: PixiTextBox
+  };
+
+  // src/ct.release/templates.ts
+  var uid = 0;
+  var focusedElement;
+  var blurFocusedElement = () => {
+    focusedElement.blur();
+  };
+  var setFocusedElement = (elt) => {
+    if (focusedElement && focusedElement !== elt) {
+      blurFocusedElement();
+    }
+    focusedElement = elt;
+  };
+  var CopyProto = {
+    set tex(value) {
+      if (this._tex === value) {
+        return;
+      }
+      var { playing } = this;
+      this.textures = res_default.getTexture(value);
+      [this.texture] = this.textures;
+      this._tex = value;
+      this.shape = res_default.getTextureShape(value);
+      this.hitArea = this.textures.hitArea;
+      if (this.anchor) {
+        this.anchor.x = this.textures[0].defaultAnchor.x;
+        this.anchor.y = this.textures[0].defaultAnchor.y;
+        if (playing) {
+          this.play();
+        }
+      }
+      if ("_bottomHeight" in this) {
+        u_default.reshapeNinePatch(this);
+      }
+    },
+    get tex() {
+      return this._tex;
+    },
+    get speed() {
+      return Math.hypot(this.hspeed, this.vspeed);
+    },
+    set speed(value) {
+      if (value === 0) {
+        this._zeroDirection = this.direction;
+        this.hspeed = this.vspeed = 0;
+        return;
+      }
+      if (this.speed === 0) {
+        const restoredDir = this._zeroDirection;
+        this._hspeed = value * Math.cos(restoredDir * Math.PI / 180);
+        this._vspeed = value * Math.sin(restoredDir * Math.PI / 180);
+        return;
+      }
+      var multiplier = value / this.speed;
+      this.hspeed *= multiplier;
+      this.vspeed *= multiplier;
+    },
+    get hspeed() {
+      return this._hspeed;
+    },
+    set hspeed(value) {
+      if (this.vspeed === 0 && value === 0) {
+        this._zeroDirection = this.direction;
+      }
+      this._hspeed = value;
+    },
+    get vspeed() {
+      return this._vspeed;
+    },
+    set vspeed(value) {
+      if (this.hspeed === 0 && value === 0) {
+        this._zeroDirection = this.direction;
+      }
+      this._vspeed = value;
+    },
+    get direction() {
+      if (this.speed === 0) {
+        return this._zeroDirection;
+      }
+      return (Math.atan2(this.vspeed, this.hspeed) * 180 / Math.PI + 360) % 360;
+    },
+    set direction(value) {
+      this._zeroDirection = value;
+      if (this.speed > 0) {
+        var { speed } = this;
+        this.hspeed = speed * Math.cos(value * Math.PI / 180);
+        this.vspeed = speed * Math.sin(value * Math.PI / 180);
+      }
+    },
+    move() {
+      if (this.gravity) {
+        this.hspeed += this.gravity * u_default.time * Math.cos(this.gravityDir * Math.PI / 180);
+        this.vspeed += this.gravity * u_default.time * Math.sin(this.gravityDir * Math.PI / 180);
+      }
+      this.x += this.hspeed * u_default.time;
+      this.y += this.vspeed * u_default.time;
+    },
+    addSpeed(spd, dir) {
+      this.hspeed += spd * Math.cos(dir * Math.PI / 180);
+      this.vspeed += spd * Math.sin(dir * Math.PI / 180);
+    },
+    getRoom() {
+      let { parent } = this;
+      while (!(parent instanceof Room)) {
+        ({ parent } = parent);
+      }
+      return parent;
+    },
+    onBeforeCreateModifier() {
+      
+      /*!@onbeforecreate@*/
+    }
+  };
+  var assignExtends = (target, exts) => {
+    let { tint } = target;
+    if (exts.tint || exts.tint === 0) {
+      tint = new PIXI.Color(target.tint).multiply(exts.tint).toNumber();
+    }
+    Object.assign(target, exts);
+    target.tint = tint;
+  };
+  var Copy = function(x, y, template, container, exts) {
+    container = container || rooms_default.current;
+    this[copyTypeSymbol] = true;
+    if (template) {
+      this.baseClass = template.baseClass;
+      this.parent = container;
+      if (template.baseClass === "AnimatedSprite" || template.baseClass === "NineSlicePlane") {
+        this._tex = template.texture || -1;
+      }
+      this.behaviors = [...template.behaviors];
+      if (template.visible === false) {
+        this.visible = false;
+      }
+    } else {
+      this.behaviors = [];
+    }
+    const oldScale = this.scale;
+    Object.defineProperty(this, "scale", {
+      get: () => oldScale,
+      set: (value) => {
+        this.scale.x = this.scale.y = Number(value);
+      }
+    });
+    this[copyTypeSymbol] = true;
+    this.xprev = this.xstart = this.x = x;
+    this.yprev = this.ystart = this.y = y;
+    this._hspeed = 0;
+    this._vspeed = 0;
+    this._zeroDirection = 0;
+    this.gravity = 0;
+    this.gravityDir = 90;
+    this.zIndex = 0;
+    this.timer1 = this.timer2 = this.timer3 = this.timer4 = this.timer5 = this.timer6 = 0;
+    this.uid = ++uid;
+    this.placedInRoom = false;
+    if (template) {
+      const templateMixin = {
+        template: template.name,
+        zIndex: template.depth,
+        onBeforeStep: templatesLib.beforeStep.bind(this),
+        onStep: template.onStep.bind(this),
+        onAfterStep: templatesLib.afterStep.bind(this),
+        onBeforeDraw: templatesLib.beforeDraw.bind(this),
+        onDraw: template.onDraw.bind(this),
+        onAfterDraw: templatesLib.afterDraw.bind(this),
+        onBeforeCreateModifier: CopyProto.onBeforeCreateModifier,
+        onCreate: template.onCreate,
+        onDestroy: template.onDestroy
+      };
+      Object.assign(this, templateMixin);
+      this.zIndex = template.depth;
+      Object.assign(this, template.extends);
+      if (exts) {
+        assignExtends(this, exts);
+      }
+      if ("texture" in template && !this.shape) {
+        this.shape = res_default.getTextureShape(template.texture || -1);
+        if (typeof template.texture === "string") {
+          this.hitArea = res_default.getTexture(template.texture).hitArea;
+        }
+      }
+      if (templatesLib.list[template.name]) {
+        templatesLib.list[template.name].push(this);
+      } else {
+        templatesLib.list[template.name] = [this];
+      }
+      this.onBeforeCreateModifier.apply(this);
+      templatesLib.templates[template.name].onCreate.apply(this);
+      onCreateModifier.apply(this);
+    } else if (exts) {
+      assignExtends(this, exts);
+      this.onBeforeCreateModifier.apply(this);
+      onCreateModifier.apply(this);
+    }
+    if (!this.shape) {
+      this.shape = res_default.getTextureShape(-1);
+    }
+    if (this.behaviors.length) {
+      runBehaviors(this, "templates", "thisOnCreate");
+    }
+    return this;
+  };
+  var mix = (target, x, y, template, parent, exts) => {
+    const proto = CopyProto;
+    const properties = Object.getOwnPropertyNames(proto);
+    for (const i in properties) {
+      if (properties[i] !== "constructor") {
+        Object.defineProperty(
+          target,
+          properties[i],
+          Object.getOwnPropertyDescriptor(proto, properties[i])
+        );
+      }
+    }
+    Copy.apply(target, [x, y, template, parent, exts]);
+  };
+  var makeCopy = (template, x, y, parent, exts) => {
+    if (!(template in templatesLib.templates)) {
+      throw new Error(`[ct.templates] An attempt to create a copy of a non-existent template \`${template}\` detected. A typo?`);
+    }
+    const t = templatesLib.templates[template];
+    if (!(t.baseClass in baseClassToPixiClass)) {
+      throw new Error(`[internal -> makeCopy] Unknown base class \`${t.baseClass}\` for template \`${template}\`.`);
+    }
+    const copy = new baseClassToPixiClass[t.baseClass](t, exts);
+    mix(copy, x, y, t, parent, exts);
+    return copy;
+  };
+  var killRecursive = (copy) => {
+    copy.kill = true;
+    if (templatesLib.isCopy(copy) && copy.onDestroy) {
+      templatesLib.onDestroy.apply(copy);
+      copy.onDestroy.apply(copy);
+    }
+    if (copy.children) {
+      for (const child of copy.children) {
+        if (templatesLib.isCopy(child)) {
+          killRecursive(child);
+        }
+      }
+    }
+    const stackIndex = stack.indexOf(copy);
+    if (stackIndex !== -1) {
+      stack.splice(stackIndex, 1);
+    }
+    if (templatesLib.isCopy(copy) && copy.template) {
+      if (copy.template) {
+        const { template } = copy;
+        if (template) {
+          const templatelistIndex = templatesLib.list[template].indexOf(copy);
+          if (templatelistIndex !== -1) {
+            templatesLib.list[template].splice(templatelistIndex, 1);
+          }
+        }
+      }
+    }
+    deadPool.push(copy);
+  };
+  var onCreateModifier = function() {
+    this.$chashes = place.getHashes(this);
+for (const hash of this.$chashes) {
+    if (!(hash in place.grid)) {
+        place.grid[hash] = [this];
+    } else {
+        place.grid[hash].push(this);
+    }
+}
+if ([false][0] && templates.isCopy(this)) {
+    this.$cDebugText = new PIXI.Text('Not initialized', {
+        fill: 0xffffff,
+        dropShadow: true,
+        dropShadowDistance: 2,
+        fontSize: [][0] || 16
+    });
+    this.$cDebugCollision = new PIXI.Graphics();
+    this.addChild(this.$cDebugCollision, this.$cDebugText);
+}
+
+  };
+  var templatesLib = {
+    /**
+     * @catnipIgnore
+     */
+    CopyProto,
+    /**
+     * @catnipIgnore
+     */
+    Background,
+    /**
+     * @catnipIgnore
+     */
+    Tilemap,
+    /**
+     * An object that contains arrays of copies of all templates.
+     * @catnipList template
+     */
+    list: {
+      BACKGROUND: [],
+      TILEMAP: []
+    },
+    /**
+     * A map of all the templates of templates exported from ct.IDE.
+     * @catnipIgnore
+     */
+    templates: {},
+    /**
+     * Creates a new copy of a given template inside the current root room.
+     * A shorthand for `templates.copyIntoRoom(template, x, y, rooms.current, exts)`
+     * @param template The name of the template to use
+     * @catnipAsset template:template
+     * @param [x] The x coordinate of a new copy. Defaults to 0.
+     * @param [y] The y coordinate of a new copy. Defaults to 0.
+     * @param [params] An optional object which parameters will be applied
+     * to the copy prior to its OnCreate event.
+     * @returns The created copy.
+     * @catnipSaveReturn
+     * @catnipIgnore
+     */
+    copy(template, x = 0, y = 0, params = {}) {
+      if (!rooms_default.current) {
+        throw new Error("[emitters.fire] An attempt to create a copy before the main room is created.");
+      }
+      return templatesLib.copyIntoRoom(template, x, y, rooms_default.current, params);
+    },
+    /**
+     * Creates a new copy of a given template inside a specific room.
+     * @param template The name of the template to use
+     * @catnipAsset template:template
+     * @param [x] The x coordinate of a new copy. Defaults to 0.
+     * @param [y] The y coordinate of a new copy. Defaults to 0.
+     * @param [room] The room to which add the copy.
+     * Defaults to the current room.
+     * @param [params] An optional object which parameters will be applied
+     * to the copy prior to its OnCreate event.
+     * @returns The created copy.
+     * @catnipSaveReturn
+     * @catnipIgnore
+     */
+    // eslint-disable-next-line max-len
+    copyIntoRoom(template, x = 0, y = 0, room, params = {}) {
+      if (!room || !(room instanceof Room)) {
+        throw new Error(`Attempt to spawn a copy of template ${template} inside an invalid room. Room's value provided: ${room}`);
+      }
+      const obj = makeCopy(template, x, y, room, params);
+      room.addChild(obj);
+      stack.push(obj);
+      return obj;
+    },
+    /**
+     * Applies a function to each copy in the current room
+     * @param {Function} func The function to apply
+     * @catnipContextChanging
+     * @returns {void}
+     */
+    each(func) {
+      for (const copy of stack) {
+        if (!copy[copyTypeSymbol]) {
+          continue;
+        }
+        func.call(copy, copy);
+      }
+    },
+    /**
+     * Applies a function to a given object (e.g. to a copy)
+     * @param {Copy} obj The copy to perform function upon.
+     * @param {Function} function The function to be applied.
+     * @catnipContextChanging
+     */
+    withCopy(obj, func) {
+      func.apply(obj, this);
+    },
+    /**
+     * Applies a function to every copy of the given template name
+     * @param {string} template The name of the template to perform function upon.
+     * @catnipAsset template:template
+     * @param {Function} function The function to be applied.
+     * @catnipContextChanging
+     */
+    withTemplate(template, func) {
+      for (const copy of templatesLib.list[template]) {
+        func.apply(copy, this);
+      }
+    },
+    /**
+     * Checks whether there are any copies of this template's name.
+     * Will throw an error if you pass an invalid template name.
+     * @param {string} template The name of a template to check.
+     * @catnipAsset template:template
+     * @returns {boolean} Returns `true` if at least one copy exists in a room;
+     * `false` otherwise.
+     */
+    exists(template) {
+      if (!(template in templatesLib.templates)) {
+        throw new Error(`[ct.templates] templates.exists: There is no such template ${template}.`);
+      }
+      return templatesLib.list[template].length > 0;
+    },
+    /**
+     * Checks whether a given object is a ct.js copy.
+     * @param {any} obj The object which needs to be checked.
+     * @returns {boolean} Returns `true` if the passed object is a copy; `false` otherwise.
+     * @catnipIgnore
+     */
+    isCopy: (obj) => obj && obj[copyTypeSymbol],
+    /**
+     * Checks whether a given object exists in game's world.
+     * Intended to be applied to copies, but may be used with other PIXI entities.
+     * @catnipIgnore
+     */
+    valid: (obj) => {
+      if (typeof obj !== "object" || obj === null) {
+        return false;
+      }
+      if (copyTypeSymbol in obj) {
+        return !obj.kill;
+      }
+      if (obj instanceof PIXI.DisplayObject) {
+        return Boolean(obj.position);
+      }
+      return false;
+    },
+    /**
+     * @catnipIgnore
+     */
+    beforeStep() {
+      
+    },
+    /**
+     * @catnipIgnore
+     */
+    afterStep() {
+      
+      if (this.behaviors.length) {
+        runBehaviors(this, "templates", "thisOnStep");
+      }
+    },
+    /**
+     * @catnipIgnore
+     */
+    beforeDraw() {
+      if ([false][0] && templates.isCopy(this)) {
+    const inverse = this.transform.localTransform.clone().invert();
+    this.$cDebugCollision.transform.setFromMatrix(inverse);
+    this.$cDebugCollision.position.set(0, 0);
+    this.$cDebugText.transform.setFromMatrix(inverse);
+    this.$cDebugText.position.set(0, 0);
+
+    const newtext = `Partitions: ${this.$chashes.join(', ')}
+CGroup: ${this.cgroup || 'unset'}
+Shape: ${(this._shape && this._shape.__type) || 'unused'}`;
+    if (this.$cDebugText.text !== newtext) {
+        this.$cDebugText.text = newtext;
+    }
+    this.$cDebugCollision
+    .clear();
+    place.drawDebugGraphic.apply(this);
+    this.$cHadCollision = false;
+}
+
+    },
+    /**
+     * @catnipIgnore
+     */
+    afterDraw() {
+      if (this.behaviors.length) {
+        runBehaviors(this, "templates", "thisOnDraw");
+      }
+      if (this.baseClass === "Button" && (this.scale.x !== 1 || this.scale.y !== 1)) {
+        this.unsize();
+      }
+      if (this.updateNineSliceShape) {
+        if (this.prevWidth !== this.width || this.prevHeight !== this.height) {
+          this.prevWidth = this.width;
+          this.prevHeight = this.height;
+          u_default.reshapeNinePatch(this);
+        }
+      }
+      /* eslint-disable no-underscore-dangle */
+if ((this.transform && (this.transform._localID !== this.transform._currentLocalID)) ||
+    this.x !== this.xprev ||
+    this.y !== this.yprev
+) {
+    delete this._shape;
+    const oldHashes = this.$chashes || [];
+    this.$chashes = place.getHashes(this);
+    for (const hash of oldHashes) {
+        if (this.$chashes.indexOf(hash) === -1) {
+            place.grid[hash].splice(place.grid[hash].indexOf(this), 1);
+        }
+    }
+    for (const hash of this.$chashes) {
+        if (oldHashes.indexOf(hash) === -1) {
+            if (!(hash in place.grid)) {
+                place.grid[hash] = [this];
+            } else {
+                place.grid[hash].push(this);
+            }
+        }
+    }
+}
+
+    },
+    /**
+     * @catnipIgnore
+     */
+    onDestroy() {
+      if (this.$chashes) {
+    for (const hash of this.$chashes) {
+        place.grid[hash].splice(place.grid[hash].indexOf(this), 1);
+    }
+}
+
+      if (this.behaviors.length) {
+        runBehaviors(this, "templates", "thisOnDestroy");
+      }
+    }
+  };
+  var templates_default = templatesLib;
+
   // src/ct.release/sounds.ts
   var PannerFilter = class extends PIXI.sound.filters.Filter {
     constructor(refDistance, rolloffFactor) {
@@ -759,2008 +2311,6 @@
   };
   var sounds_default = soundsLib;
 
-  // src/ct.release/res.ts
-  var loadingScreen = document.querySelector(".ct-aLoadingScreen");
-  var loadingBar = loadingScreen.querySelector(".ct-aLoadingBar");
-  var normalizeAssetPath = (path) => {
-    path = path.replace(/\\/g, "/");
-    if (path[0] === "/") {
-      path = path.slice(1);
-    }
-    return path.split("/").filter((empty) => empty);
-  };
-  var getEntriesByPath = (nPath) => {
-    if (!resLib.tree) {
-      throw new Error("[res] Asset tree was not exported; check your project's export settings.");
-    }
-    let current = resLib.tree;
-    for (const subpath of nPath) {
-      const folder = current.find((i) => i.name === subpath && i.type === "folder");
-      if (!folder) {
-        throw new Error(`[res] Could not find folder ${subpath} in path ${nPath.join("/")}`);
-      }
-      current = folder.entries;
-    }
-    return current;
-  };
-  var resLib = {
-    sounds: soundMap,
-    pixiSounds: pixiSoundInstances,
-    textures: {},
-    tree: [
-      false
-    ][0],
-    /**
-     * Loads and executes a script by its URL
-     * @param {string} url The URL of the script file, with its extension.
-     * Can be relative or absolute.
-     * @returns {Promise<void>}
-     * @async
-     */
-    loadScript(url = required("url", "ct.res.loadScript")) {
-      var script = document.createElement("script");
-      script.src = url;
-      const promise = new Promise((resolve, reject) => {
-        script.onload = () => {
-          resolve();
-        };
-        script.onerror = () => {
-          reject();
-        };
-      });
-      document.getElementsByTagName("head")[0].appendChild(script);
-      return promise;
-    },
-    /**
-     * Loads an individual image as a named ct.js texture.
-     * @param {string|boolean} url The path to the source image.
-     * @param {string} name The name of the resulting ct.js texture
-     * as it will be used in your code.
-     * @param {ITextureOptions} textureOptions Information about texture's axis
-     * and collision shape.
-     * @returns {Promise<CtjsAnimation>} The imported animation, ready to be used.
-     */
-    async loadTexture(url = required("url", "ct.res.loadTexture"), name = required("name", "ct.res.loadTexture"), textureOptions = {}) {
-      let texture;
-      try {
-        texture = await PIXI.Assets.load(url);
-      } catch (e) {
-        console.error(`[ct.res] Could not load image ${url}`);
-        throw e;
-      }
-      const ctTexture = [texture];
-      ctTexture.shape = texture.shape = textureOptions.shape || {};
-      texture.defaultAnchor = ctTexture.defaultAnchor = new PIXI.Point(
-        textureOptions.anchor ? textureOptions.anchor.x : 0,
-        textureOptions.anchor ? textureOptions.anchor.y : 0
-      );
-      const hitArea = u_default.getHitArea(texture.shape);
-      if (hitArea) {
-        texture.hitArea = ctTexture.hitArea = hitArea;
-      }
-      resLib.textures[name] = ctTexture;
-      return ctTexture;
-    },
-    /**
-     * Loads a Texture Packer compatible .json file with its source image,
-     * adding ct.js textures to the game.
-     * @param {string} url The path to the JSON file that describes the atlas' textures.
-     * @returns A promise that resolves into an array
-     * of all the loaded textures' names.
-     */
-    async loadAtlas(url = required("url", "ct.res.loadAtlas")) {
-      const sheet = await PIXI.Assets.load(url);
-      for (const animation in sheet.animations) {
-        const tex = sheet.animations[animation];
-        const animData = sheet.data.animations;
-        for (let i = 0, l = animData[animation].length; i < l; i++) {
-          const a = animData[animation], f = a[i];
-          tex[i].shape = sheet.data.frames[f].shape;
-        }
-        tex.shape = tex[0].shape || {};
-        resLib.textures[animation] = tex;
-        const hitArea = u_default.getHitArea(resLib.textures[animation].shape);
-        if (hitArea) {
-          resLib.textures[animation].hitArea = hitArea;
-          for (const frame of resLib.textures[animation]) {
-            frame.hitArea = hitArea;
-          }
-        }
-      }
-      return Object.keys(sheet.animations);
-    },
-    /**
-     * Unloads the specified atlas by its URL and removes all the textures
-     * it has introduced to the game.
-     * Will do nothing if the specified atlas was not loaded (or was already unloaded).
-     */
-    async unloadAtlas(url = required("url", "ct.res.unloadAtlas")) {
-      const { animations } = PIXI.Assets.get(url);
-      if (!animations) {
-        console.log(`[ct.res] Attempt to unload an atlas that was not loaded/was unloaded already: ${url}`);
-        return;
-      }
-      for (const animation of animations) {
-        delete resLib.textures[animation];
-      }
-      await PIXI.Assets.unload(url);
-    },
-    /**
-     * Loads a bitmap font by its XML file.
-     * @param url The path to the XML file that describes the bitmap fonts.
-     * @returns A promise that resolves into the font's name (the one you've passed with `name`).
-     */
-    async loadBitmapFont(url = required("url", "ct.res.loadBitmapFont")) {
-      await PIXI.Assets.load(url);
-    },
-    async unloadBitmapFont(url = required("url", "ct.res.unloadBitmapFont")) {
-      await PIXI.Assets.unload(url);
-    },
-    /**
-     * Loads a sound.
-     * @param path Path to the sound
-     * @param name The name of the sound as it will be used in ct.js game.
-     * @param preload Whether to start loading now or postpone it.
-     * Postponed sounds will load when a game tries to play them, or when you manually
-     * trigger the download with `sounds.load(name)`.
-     * @returns A promise with the name of the imported sound.
-     */
-    loadSound(path = required("path", "ct.res.loadSound"), name = required("name", "ct.res.loadSound"), preload = true) {
-      return new Promise((resolve, reject) => {
-        const opts = {
-          url: path,
-          preload
-        };
-        if (preload) {
-          opts.loaded = (err) => {
-            if (err) {
-              reject(err);
-            } else {
-              resLib.pixiSounds[name] = asset;
-              resolve(name);
-            }
-          };
-        }
-        const asset = PIXI.sound.add(name, opts);
-        if (!preload) {
-          resolve(name);
-        }
-      });
-    },
-    async loadGame() {
-      const changeProgress = (percents) => {
-        loadingScreen.setAttribute("data-progress", String(percents));
-        loadingBar.style.width = percents + "%";
-      };
-      const atlases = [
-        ["./img/a0.{webp,png}.9c364067f7.json"]
-      ][0];
-      const tiledImages = [
-        {}
-      ][0];
-      const bitmapFonts = [
-        []
-      ][0];
-      const totalAssets = atlases.length;
-      let assetsLoaded = 0;
-      const loadingPromises = [];
-      loadingPromises.push(...atlases.map((atlas) => resLib.loadAtlas(atlas).then((texturesNames) => {
-        assetsLoaded++;
-        changeProgress(assetsLoaded / totalAssets * 100);
-        return texturesNames;
-      })));
-      for (const name in tiledImages) {
-        loadingPromises.push(resLib.loadTexture(
-          tiledImages[name].source,
-          name,
-          {
-            anchor: tiledImages[name].anchor,
-            shape: tiledImages[name].shape
-          }
-        ));
-      }
-      for (const font in bitmapFonts) {
-        loadingPromises.push(resLib.loadBitmapFont(bitmapFonts[font]));
-      }
-      for (const sound of exportedSounds) {
-        for (const variant of sound.variants) {
-          loadingPromises.push(resLib.loadSound(
-            variant.source,
-            `${pixiSoundPrefix}${variant.uid}`,
-            sound.preload
-          ));
-        }
-      }
-      /*!@res@*/
-      
-      await Promise.all(loadingPromises);
-      loadingScreen.classList.add("hidden");
-    },
-    /**
-     * Gets a pixi.js texture from a ct.js' texture name,
-     * so that it can be used in pixi.js objects.
-     * @param name The name of the ct.js texture, or -1 for an empty texture
-     * @catnipAsset name:texture
-     * @param [frame] The frame to extract
-     * @returns {PIXI.Texture|PIXI.Texture[]} If `frame` was specified,
-     * returns a single PIXI.Texture. Otherwise, returns an array
-     * with all the frames of this ct.js' texture.
-     */
-    getTexture: (name, frame) => {
-      if (frame === null) {
-        frame = void 0;
-      }
-      if (name === -1) {
-        if (frame !== void 0) {
-          return PIXI.Texture.EMPTY;
-        }
-        return [PIXI.Texture.EMPTY];
-      }
-      if (!(name in resLib.textures)) {
-        throw new Error(`Attempt to get a non-existent texture ${name}`);
-      }
-      const tex = resLib.textures[name];
-      if (frame !== void 0) {
-        return tex[frame];
-      }
-      return tex;
-    },
-    /**
-     * Returns the collision shape of the given texture.
-     * @param name The name of the ct.js texture, or -1 for an empty collision shape
-     * @catnipAsset name:texture
-     */
-    getTextureShape(name) {
-      if (name === -1) {
-        return {
-          type: "point"
-        };
-      }
-      if (!(name in resLib.textures)) {
-        throw new Error(`Attempt to get a shape of a non-existent texture ${name}`);
-      }
-      return resLib.textures[name].shape;
-    },
-    /**
-     * Gets direct children of a folder
-     * @catnipIcon folder
-     */
-    getChildren(path) {
-      return getEntriesByPath(normalizeAssetPath(path || "")).filter((entry) => entry.type !== "folder");
-    },
-    /**
-     * Gets direct children of a folder, filtered by asset type
-     * @catnipIcon folder
-     */
-    getOfType(type, path) {
-      return getEntriesByPath(normalizeAssetPath(path || "")).filter((entry) => entry.type === type);
-    },
-    /**
-     * Gets all the assets inside of a folder, including in subfolders.
-     * @catnipIcon folder
-     */
-    getAll(path) {
-      const folderEntries = getEntriesByPath(normalizeAssetPath(path || "")), entries = [];
-      const walker = (currentList) => {
-        for (const entry of currentList) {
-          if (entry.type === "folder") {
-            walker(entry.entries);
-          } else {
-            entries.push(entry);
-          }
-        }
-      };
-      walker(folderEntries);
-      return entries;
-    },
-    /**
-     * Get all the assets inside of a folder, including in subfolders, filtered by type.
-     * @catnipIcon folder
-     */
-    getAllOfType(type, path) {
-      const folderEntries = getEntriesByPath(normalizeAssetPath(path || "")), entries = [];
-      const walker = (currentList) => {
-        for (const entry of currentList) {
-          if (entry.type === "folder") {
-            walker(entry.entries);
-          }
-          if (entry.type === type) {
-            entries.push(entry);
-          }
-        }
-      };
-      walker(folderEntries);
-      return entries;
-    }
-  };
-  if (document.fonts) { for (const font of document.fonts) { font.load(); }}
-  var res_default = resLib;
-
-  // src/ct.release/backgrounds.ts
-  var bgList = {};
-  var Background = class extends PIXI.TilingSprite {
-    constructor(texName, frame = 0, depth = 0, exts = {
-      movementX: 0,
-      movementY: 0,
-      parallaxX: 0,
-      parallaxY: 0,
-      repeat: "repeat",
-      scaleX: 0,
-      scaleY: 0,
-      shiftX: 0,
-      shiftY: 0
-    }) {
-      let { width, height } = camera_default;
-      const texture = texName instanceof PIXI.Texture ? texName : res_default.getTexture(texName, frame || 0);
-      if (exts.repeat === "no-repeat" || exts.repeat === "repeat-x") {
-        height = texture.height * (exts.scaleY || 1);
-      }
-      if (exts.repeat === "no-repeat" || exts.repeat === "repeat-y") {
-        width = texture.width * (exts.scaleX || 1);
-      }
-      super(texture, width, height);
-      this.parallaxX = 1;
-      this.parallaxY = 1;
-      this.shiftX = 0;
-      this.shiftY = 0;
-      this.movementX = 0;
-      this.movementY = 0;
-      if (typeof texName === "string") {
-        if (!bgList[texName]) {
-          bgList[texName] = [];
-        }
-        bgList[texName].push(this);
-      } else {
-        if (!bgList.OTHER) {
-          bgList.OTHER = [];
-        }
-        bgList.OTHER.push(this);
-      }
-      templates_default.list.BACKGROUND.push(this);
-      stack.push(this);
-      this.on("destroyed", () => {
-        templates_default.list.BACKGROUND.splice(templates_default.list.BACKGROUND.indexOf(this), 1);
-        stack.splice(stack.indexOf(this), 1);
-      });
-      this.zIndex = depth;
-      this.anchor.set(0, 0);
-      if (exts) {
-        Object.assign(this, exts);
-      }
-      if (this.scaleX) {
-        this.tileScale.x = Number(this.scaleX);
-      }
-      if (this.scaleY) {
-        this.tileScale.y = Number(this.scaleY);
-      }
-      this.reposition();
-    }
-    onStep() {
-      this.shiftX += u_default.time * this.movementX;
-      this.shiftY += u_default.time * this.movementY;
-      if (this.repeat === "repeat-x" || this.repeat === "repeat") {
-        this.shiftX %= this.texture.width * this.tileScale.x;
-      }
-      if (this.repeat === "repeat-y" || this.repeat === "repeat") {
-        this.shiftY %= this.texture.height * this.tileScale.y;
-      }
-    }
-    /**
-     * Updates the position of this background.
-     */
-    reposition() {
-      const cameraBounds = this.isUi ? {
-        x: 0,
-        y: 0,
-        width: camera_default.width,
-        height: camera_default.height
-      } : camera_default.getBoundingBox();
-      const dx = camera_default.x - camera_default.width / 2, dy = camera_default.y - camera_default.height / 2;
-      if (this.repeat !== "repeat-x" && this.repeat !== "no-repeat") {
-        this.y = cameraBounds.y;
-        this.tilePosition.y = -this.y - dy * (this.parallaxY - 1) + this.shiftY;
-        this.height = cameraBounds.height + 1;
-      } else {
-        this.y = this.shiftY + cameraBounds.y * (this.parallaxY - 1);
-      }
-      if (this.repeat !== "repeat-y" && this.repeat !== "no-repeat") {
-        this.x = cameraBounds.x;
-        this.tilePosition.x = -this.x - dx * (this.parallaxX - 1) + this.shiftX;
-        this.width = cameraBounds.width + 1;
-      } else {
-        this.x = this.shiftX + cameraBounds.x * (this.parallaxX - 1);
-      }
-    }
-    onDraw() {
-      this.reposition();
-    }
-    static onCreate() {
-    }
-    static onDestroy() {
-    }
-    get isUi() {
-      return this.parent ? Boolean(this.parent.isUi) : false;
-    }
-  };
-  var backgroundsLib = {
-    /**
-     * An object that contains all the backgrounds of the current room.
-     * @type {Record<string, Background[]>}
-     * @catnipList texture
-     */
-    list: bgList,
-    /**
-     * @param texName - Name of a texture to use as a background
-     * @catnipAsset texName:texture
-     * @param [frame] - The index of a frame to use. Defaults to 0
-     * @param [depth] - The depth to place the background at. Defaults to 0
-     * @param [container] - Where to put the background. Defaults to current room,
-     * can be a room or other pixi container.
-     * @returns {Background} The created background
-     * @catnipSaveReturn
-     */
-    add(texName, frame = 0, depth = 0, container) {
-      if (!rooms_default.current) {
-        throw new Error("[backgrounds.add] Cannot add a background before the main room is created");
-      }
-      if (!container) {
-        container = rooms_default.current;
-      }
-      if (!texName) {
-        throw new Error("[backgrounds] The texName argument is required.");
-      }
-      const bg = new Background(texName, frame, depth);
-      if (container instanceof Room) {
-        container.backgrounds.push(bg);
-      }
-      container.addChild(bg);
-      return bg;
-    }
-  };
-  var backgrounds_default = backgroundsLib;
-
-  // src/ct.release/tilemaps.ts
-  var Tile = class extends PIXI.Sprite {
-  };
-  var TileChunk = class extends PIXI.Container {
-    // pixi.js' Container is a jerk
-  };
-  var Tilemap = class extends PIXI.Container {
-    /**
-     * @param template A template object that contains data about depth
-     * and tile placement. It is usually used by ct.IDE.
-     */
-    constructor(template) {
-      super();
-      this.pixiTiles = [];
-      if (template) {
-        this.zIndex = template.depth;
-        this.tiles = template.tiles.map((tile) => ({
-          ...tile
-        }));
-        if (template.extends) {
-          Object.assign(this, template.extends);
-        }
-        for (let i = 0, l = template.tiles.length; i < l; i++) {
-          const tile = template.tiles[i];
-          const textures = res_default.getTexture(tile.texture);
-          const sprite = new Tile(textures[tile.frame]);
-          sprite.anchor.x = textures[0].defaultAnchor.x;
-          sprite.anchor.y = textures[0].defaultAnchor.y;
-          sprite.shape = textures.shape;
-          sprite.scale.set(tile.scale.x, tile.scale.y);
-          sprite.rotation = tile.rotation;
-          sprite.alpha = tile.opacity;
-          sprite.tint = tile.tint;
-          sprite.x = tile.x;
-          sprite.y = tile.y;
-          this.addChild(sprite);
-          this.pixiTiles.push(sprite);
-          this.tiles[i].sprite = sprite;
-        }
-        if (template.cache) {
-          this.cache();
-        }
-      } else {
-        this.tiles = [];
-      }
-      templates_default.list.TILEMAP.push(this);
-      this.on("destroyed", () => {
-        templates_default.list.TILEMAP.splice(templates_default.list.TILEMAP.indexOf(this), 1);
-      });
-    }
-    /**
-     * Adds a tile to the tilemap. Will throw an error if a tilemap is cached.
-     * @param textureName The name of the texture to use
-     * @param x The horizontal location of the tile
-     * @param y The vertical location of the tile
-     * @param [frame] The frame to pick from the source texture. Defaults to 0.
-     * @returns The created tile
-     */
-    addTile(textureName, x, y, frame = 0) {
-      if (this.cached) {
-        throw new Error("[ct.tiles] Adding tiles to cached tilemaps is forbidden. Create a new tilemap, or add tiles before caching the tilemap.");
-      }
-      const texture = res_default.getTexture(textureName, frame);
-      const sprite = new Tile(texture);
-      sprite.x = x;
-      sprite.y = y;
-      sprite.shape = texture.shape;
-      this.tiles.push({
-        texture: textureName,
-        frame,
-        x,
-        y,
-        width: sprite.width,
-        height: sprite.height,
-        sprite,
-        opacity: 1,
-        rotation: 1,
-        scale: {
-          x: 1,
-          y: 1
-        },
-        tint: 16777215
-      });
-      this.addChild(sprite);
-      this.pixiTiles.push(sprite);
-      return sprite;
-    }
-    /**
-     * Enables caching on this tileset, freezing it and turning it
-     * into a series of bitmap textures. This proides great speed boost,
-     * but prevents further editing.
-     */
-    cache(chunkSize = 1024) {
-      if (this.cached) {
-        throw new Error("[ct.tiles] Attempt to cache an already cached tilemap.");
-      }
-      const bounds = this.getLocalBounds();
-      const cols = Math.ceil(bounds.width / chunkSize), rows = Math.ceil(bounds.height / chunkSize);
-      this.cells = [];
-      for (let y = 0; y < rows; y++) {
-        for (let x = 0; x < cols; x++) {
-          const cell = new TileChunk();
-          this.cells.push(cell);
-        }
-      }
-      for (let i = 0, l = this.tiles.length; i < l; i++) {
-        const [tile] = this.children, x = Math.floor((tile.x - bounds.x) / chunkSize), y = Math.floor((tile.y - bounds.y) / chunkSize);
-        this.cells[y * cols + x].addChild(tile);
-      }
-      this.removeChildren();
-      for (let i = 0, l = this.cells.length; i < l; i++) {
-        if (this.cells[i].children.length === 0) {
-          this.cells.splice(i, 1);
-          i--;
-          l--;
-          continue;
-        }
-        this.addChild(this.cells[i]);
-        if (settings.pixelart) {
-          this.cells[i].cacheAsBitmapResolution = 1;
-        }
-        this.cells[i].cacheAsBitmap = true;
-      }
-      this.cached = true;
-    }
-    /**
-     * Enables caching on this tileset, freezing it and turning it
-     * into a series of bitmap textures. This proides great speed boost,
-     * but prevents further editing.
-     *
-     * This version packs tiles into rhombus-shaped chunks, and sorts them
-     * from top to bottom. This fixes seam issues for isometric games.
-     */
-    cacheDiamond(chunkSize = 1024) {
-      if (this.cached) {
-        throw new Error("[ct.tiles] Attempt to cache an already cached tilemap.");
-      }
-      this.cells = [];
-      this.diamondCellMap = {};
-      for (let i = 0, l = this.tiles.length; i < l; i++) {
-        const [tile] = this.children;
-        const { x: xNormalized, y: yNormalized } = u_default.rotate(tile.x, tile.y * 2, -45);
-        const x = Math.floor(xNormalized / chunkSize), y = Math.floor(yNormalized / chunkSize), key = `${x}:${y}`;
-        if (!(key in this.diamondCellMap)) {
-          const chunk = new TileChunk();
-          chunk.chunkX = x;
-          chunk.chunkY = y;
-          this.diamondCellMap[key] = chunk;
-          this.cells.push(chunk);
-        }
-        this.diamondCellMap[key].addChild(tile);
-      }
-      this.removeChildren();
-      this.cells.sort((a, b) => {
-        const maxA = Math.max(a.chunkY, a.chunkX), maxB = Math.max(b.chunkY, b.chunkX);
-        if (maxA === maxB) {
-          return b.chunkX - a.chunkX;
-        }
-        return maxA - maxB;
-      });
-      for (let i = 0, l = this.cells.length; i < l; i++) {
-        this.addChild(this.cells[i]);
-        this.cells[i].cacheAsBitmap = true;
-      }
-      this.cached = true;
-    }
-  };
-  var tilemapsLib = {
-    /**
-     * Creates a new tilemap at a specified depth, and adds it to the main room (ct.room).
-     * @param [depth] The depth of a newly created tilemap. Defaults to 0.
-     * @returns {Tilemap} The created tilemap.
-     */
-    create(depth = 0) {
-      if (!rooms_default.current) {
-        throw new Error("[emitters.fire] An attempt to create a tilemap before the main room is created.");
-      }
-      const tilemap = new Tilemap();
-      tilemap.zIndex = depth;
-      rooms_default.current.addChild(tilemap);
-      return tilemap;
-    },
-    /**
-     * Adds a tile to the specified tilemap. It is the same as
-     * calling `tilemap.addTile(textureName, x, y, frame).
-     * @param tilemap The tilemap to modify.
-     * @param textureName The name of the texture to use.
-     * @catnipAsset textureName:texture
-     * @param x The horizontal location of the tile.
-     * @param y The vertical location of the tile.
-     * @param frame The frame to pick from the source texture. Defaults to 0.
-     * @returns {PIXI.Sprite} The created tile
-     */
-    addTile(tilemap, textureName, x, y, frame = 0) {
-      return tilemap.addTile(textureName, x, y, frame);
-    },
-    /**
-     * Enables caching on this tileset, freezing it and turning it
-     * into a series of bitmap textures. This proides great speed boost,
-     * but prevents further editing.
-     *
-     * This is the same as calling `tilemap.cache();`
-     *
-     * @param tilemap The tilemap which needs to be cached.
-     * @param chunkSize The size of one chunk.
-     */
-    cache(tilemap, chunkSize) {
-      tilemap.cache(chunkSize);
-    },
-    /**
-     * Enables caching on this tileset, freezing it and turning it
-     * into a series of bitmap textures. This proides great speed boost,
-     * but prevents further editing.
-     *
-     * This version packs tiles into rhombus-shaped chunks, and sorts them
-     * from top to bottom. This fixes seam issues for isometric games.
-     * Note that tiles should be placed on a flat plane for the proper sorting.
-     * If you need an effect of elevation, consider shifting each tile with
-     * tile.pivot.y property.
-     *
-     * This is the same as calling `tilemap.cacheDiamond();`
-     *
-     * @param tilemap The tilemap which needs to be cached.
-     * @param chunkSize The size of one chunk.
-     */
-    cacheDiamond(tilemap, chunkSize) {
-      tilemap.cacheDiamond(chunkSize);
-    }
-  };
-  var tilemaps_default = tilemapsLib;
-
-  // src/ct.release/behaviors.ts
-  var behaviorsLib = {
-    /**
-     * @catnipIgnore
-     */
-    templates: [
-      {}
-    ][0],
-    /**
-     * @catnipIgnore
-     */
-    rooms: [
-      {'ECS': {
-            'thisOnStep': function () {
-            /* behavior ECS — core_OnStep (On frame start event) */
-{
-G.main.frameStart()
-}
-
-            },
-'thisOnCreate': function () {
-            /* behavior ECS — core_OnRoomStart (On room start event) */
-{
-G.main.init()
-}
-
-            },
-'thisOnDraw': function () {
-            /* behavior ECS — core_OnDraw (On frame end event) */
-{
-G.main.frameEnd()
-}
-
-            }
-        }}
-    ][0],
-    /**
-     * Adds a behavior to the given room or template.
-     * Only dynamic behaviors can be added.
-     * (Static behaviors are marked with a frozen (❄️) sign in UI.)
-     * @param target The room or template to which the behavior should be added.
-     * @param behavior The name of the behavior to be added, as it was named in ct.IDE.
-     * @catnipAsset behavior:behavior
-     */
-    add(target, behavior) {
-      if (target.behaviors.includes(behavior)) {
-        throw new Error(`[behaviors.add] Behavior ${behavior} already exists on ${target instanceof Room ? target.name : target.template}`);
-      }
-      const domain = target instanceof Room ? "rooms" : "templates";
-      const bh = behaviorsLib[domain][behavior];
-      if (bh === "static") {
-        throw new Error(`[behaviors.add] Behavior ${behavior} cannot be added to ${target instanceof Room ? target.name : target.template} because this behavior cannot be added dynamically.`);
-      }
-      if (!bh) {
-        throw new Error(`[behaviors.add] Behavior ${behavior} does not exist or cannot be applied to ${domain}.`);
-      }
-      target.behaviors.push(behavior);
-      if (bh.thisOnAdded) {
-        bh.thisOnAdded.apply(target);
-      }
-    },
-    /**
-     * Removes a behavior from the given room or template.
-     * Only dynamic behaviors can be removed.
-     * (Static behaviors are marked with a frozen (❄️) sign in UI.)
-     * @param target The room or template from which the behavior should be removed.
-     * @param behavior The name of the behavior to be removed, as it was named in ct.IDE.
-     * @catnipAsset behavior:behavior
-     */
-    remove(target, behavior) {
-      if (!target.behaviors.includes(behavior)) {
-        throw new Error(`[behaviors.remove] Behavior ${behavior} already exists on ${target instanceof Room ? target.name : target.template}`);
-      }
-      const domain = target instanceof Room ? "rooms" : "templates";
-      const bh = behaviorsLib[domain][behavior];
-      if (bh === "static") {
-        throw new Error(`[behaviors.remove] Behavior ${behavior} cannot be removed from ${target instanceof Room ? target.name : target.template} because this behavior cannot be removed dynamically.`);
-      }
-      if (!bh) {
-        throw new Error(`[behaviors.remove] Behavior ${behavior} does not exist or cannot be applied to ${domain}.`);
-      }
-      if (bh.thisOnRemoved) {
-        bh.thisOnRemoved.apply(target);
-      }
-      target.behaviors.splice(target.behaviors.indexOf(behavior), 1);
-    },
-    /**
-     * Tells whether the specified object has a behavior applied to it.
-     * @param target A room or a copy to test against.
-     * @param behavior The behavior to look for.
-     * @catnipAsset behavior:behavior
-     */
-    has(target, behavior) {
-      return target.behaviors.includes(behavior);
-    }
-  };
-  var runBehaviors = (target, domain, kind) => {
-    for (const bh of target.behaviors) {
-      const fn = behaviorsLib[domain][bh];
-      if (fn === "static" || !fn) {
-        continue;
-      }
-      fn[kind]?.apply(target);
-    }
-  };
-  var behaviors_default = behaviorsLib;
-
-  // src/ct.release/styles.ts
-  var stylesLib = {
-    /**
-     * @catnipIgnore
-     */
-    types: {},
-    /**
-     * Creates a new style with a given name.
-     * Technically, it just writes `data` to `styles.types`
-     * @catnipIgnore
-     */
-    new(name, styleTemplate) {
-      stylesLib.types[name] = styleTemplate;
-      return styleTemplate;
-    },
-    /**
-     * Returns a style of a given name. The actual behavior strongly depends on `copy` parameter.
-     * @param name The name of the style to load
-     * @catnipAsset name:style
-     * @param [copy] If not set, returns the source style object.
-     * Editing it will affect all new style calls.
-     * When set to `true`, will create a new object, which you can safely modify
-     * without affecting the source style.
-     * When set to an object, this will create a new object as well,
-     * augmenting it with given properties.
-     * @returns {object} The resulting style
-     */
-    get(name, copy) {
-      if (copy === true) {
-        return Object.assign({}, stylesLib.types[name]);
-      }
-      if (copy) {
-        return Object.assign(Object.assign({}, stylesLib.types[name]), copy);
-      }
-      return stylesLib.types[name];
-    }
-  };
-  var styles_default = stylesLib;
-
-  // src/ct.release/templateBaseClasses/PixiButton.ts
-  var PixiButton = class extends PIXI.Container {
-    #disabled;
-    get disabled() {
-      return this.#disabled;
-    }
-    set disabled(val) {
-      this.#disabled = val;
-      if (val) {
-        this.panel.texture = this.disabledTexture;
-        this.eventMode = "none";
-      } else {
-        this.panel.texture = this.normalTexture;
-        this.eventMode = "dynamic";
-      }
-    }
-    get text() {
-      return this.textLabel.text;
-    }
-    set text(val) {
-      this.textLabel.text = val;
-    }
-    /**
-     * The color of the button's texture.
-     */
-    get tint() {
-      return this.panel.tint;
-    }
-    set tint(val) {
-      this.panel.tint = val;
-    }
-    constructor(t, exts) {
-      if (t?.baseClass !== "Button") {
-        throw new Error("Don't call PixiButton class directly! Use templates.copy to create an instance instead.");
-      }
-      super();
-      this.normalTexture = res_default.getTexture(t.texture, 0);
-      this.hoverTexture = t.hoverTexture ? res_default.getTexture(t.hoverTexture, 0) : this.normalTexture;
-      this.pressedTexture = t.pressedTexture ? res_default.getTexture(t.pressedTexture, 0) : this.normalTexture;
-      this.disabledTexture = t.disabledTexture ? res_default.getTexture(t.disabledTexture, 0) : this.normalTexture;
-      this.panel = new PIXI.NineSlicePlane(
-        this.normalTexture,
-        t.nineSliceSettings?.left ?? 16,
-        t.nineSliceSettings?.top ?? 16,
-        t.nineSliceSettings?.right ?? 16,
-        t.nineSliceSettings?.bottom ?? 16
-      );
-      const style = t.textStyle === -1 ? PIXI.TextStyle.defaultStyle : styles_default.get(t.textStyle, true);
-      if (exts.customSize) {
-        style.fontSize = Number(exts.customSize);
-      }
-      if (t.useBitmapText) {
-        this.textLabel = new PIXI.BitmapText(exts.customText || t.defaultText || "", {
-          ...style,
-          fontSize: Number(style.fontSize),
-          fontName: style.fontFamily.split(",")[0].trim()
-        });
-        this.textLabel.tint = new PIXI.Color(style.fill);
-      } else {
-        this.textLabel = new PIXI.Text(exts.customText || t.defaultText || "", style);
-      }
-      this.textLabel.anchor.set(0.5);
-      this.addChild(this.panel, this.textLabel);
-      this.eventMode = "dynamic";
-      this.cursor = "pointer";
-      this.on("pointerenter", this.hover);
-      this.on("pointerentercapture", this.hover);
-      this.on("pointerleave", this.blur);
-      this.on("pointerleavecapture", this.blur);
-      this.on("pointerdown", this.press);
-      this.on("pointerdowncapture", this.press);
-      this.on("pointerup", this.hover);
-      this.on("pointerupcapture", this.hover);
-      this.on("pointerupoutside", this.blur);
-      this.on("pointerupoutsidecapture", this.blur);
-      this.updateNineSliceShape = t.nineSliceSettings.autoUpdate;
-      let baseWidth = this.panel.width, baseHeight = this.panel.height;
-      if ("scaleX" in exts) {
-        baseWidth *= exts.scaleX;
-      }
-      if ("scaleY" in exts) {
-        baseHeight *= exts.scaleY;
-      }
-      this.resize(baseWidth, baseHeight);
-      u_default.reshapeNinePatch(this);
-    }
-    unsize() {
-      const { x, y } = this.scale;
-      this.panel.scale.x *= x;
-      this.panel.scale.y *= y;
-      this.scale.set(1);
-      this.textLabel.x = this.panel.width / 2;
-      this.textLabel.y = this.panel.height / 2;
-    }
-    resize(newWidth, newHeight) {
-      this.panel.width = newWidth;
-      this.panel.height = newHeight;
-      this.textLabel.x = newWidth / 2;
-      this.textLabel.y = newHeight / 2;
-    }
-    hover() {
-      if (this.disabled) {
-        return;
-      }
-      this.panel.texture = this.hoverTexture;
-    }
-    blur() {
-      if (this.disabled) {
-        return;
-      }
-      this.panel.texture = this.normalTexture;
-    }
-    press() {
-      if (this.disabled) {
-        return;
-      }
-      this.panel.texture = this.pressedTexture;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/PixiSpritedCounter.ts
-  var PixiSpritedCounter = class extends PIXI.TilingSprite {
-    #count;
-    #baseWidth;
-    #baseHeight;
-    /**
-     * Amount of sprites to show.
-     */
-    get count() {
-      return this.#count;
-    }
-    set count(val) {
-      this.#count = val;
-      this.width = this.#count * this.#baseWidth * this.scale.x;
-      this.height = this.#baseHeight * this.scale.y;
-      this.tileScale.set(this.scale.x, this.scale.y);
-      this.shape = {
-        type: "rect",
-        left: 0,
-        top: 0,
-        right: this.#baseWidth * this.#count,
-        bottom: this.#baseHeight
-      };
-    }
-    constructor(t, exts) {
-      if (t.baseClass !== "SpritedCounter") {
-        throw new Error("Don't call PixiScrollingTexture class directly! Use templates.copy to create an instance instead.");
-      }
-      const tex = res_default.getTexture(t.texture, 0);
-      super(tex, tex.width, tex.height);
-      this.#baseWidth = this.width;
-      this.#baseHeight = this.height;
-      this.anchor.set(0);
-      if ("scaleX" in exts) {
-        this.scale.x = exts.scaleX ?? 1;
-      }
-      if ("scaleY" in exts) {
-        this.scale.y = exts.scaleY ?? 1;
-      }
-      this.count = t.spriteCount;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/PixiScrollingTexture.ts
-  var PixiScrollingTexture = class extends PIXI.TilingSprite {
-    constructor(t, exts) {
-      if (t.baseClass !== "RepeatingTexture") {
-        throw new Error("Don't call PixiScrollingTexture class directly! Use templates.copy to create an instance instead.");
-      }
-      const tex = res_default.getTexture(t.texture, 0);
-      super(tex, tex.width, tex.height);
-      this.scrollX = 0;
-      this.scrollY = 0;
-      this.#baseWidth = this.width;
-      this.#baseHeight = this.height;
-      this.anchor.set(0);
-      this.scrollSpeedX = t.scrollX;
-      this.scrollSpeedY = t.scrollY;
-      this.pixelPerfect = Boolean(t.pixelPerfect);
-      if ("scaleX" in exts) {
-        this.width = this.#baseWidth * (exts.scaleX ?? 1);
-      }
-      if ("scaleY" in exts) {
-        this.height = this.#baseHeight * (exts.scaleY ?? 1);
-      }
-      this.on("added", () => {
-        rooms_default.current.tickerSet.add(this);
-      });
-      this.on("removed", () => {
-        rooms_default.current.tickerSet.delete(this);
-      });
-      this.shape = {
-        type: "rect",
-        left: 0,
-        top: 0,
-        right: this.width,
-        bottom: this.height
-      };
-    }
-    #baseWidth;
-    #baseHeight;
-    tick() {
-      if (this.isUi) {
-        this.scrollX += this.scrollSpeedX * u_default.timeUi;
-        this.scrollY += this.scrollSpeedY * u_default.timeUi;
-      } else {
-        this.scrollX += this.scrollSpeedX * u_default.time;
-        this.scrollY += this.scrollSpeedY * u_default.time;
-      }
-      if (this.pixelPerfect) {
-        this.tilePosition.x = Math.round(this.scrollX);
-        this.tilePosition.y = Math.round(this.scrollY);
-      } else {
-        this.tilePosition.x = this.scrollX;
-        this.tilePosition.y = this.scrollY;
-      }
-      this.tilePosition.x %= this.texture.width;
-      this.tilePosition.y %= this.texture.height;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/PixiTextBox.ts
-  var cssStyle = document.createElement("style");
-  document.head.appendChild(cssStyle);
-  var PixiTextBox = class extends PIXI.Container {
-    // eslint-disable-next-line max-lines-per-function, complexity
-    constructor(t, exts) {
-      if (t?.baseClass !== "TextBox") {
-        throw new Error("Don't call PixiTextBox class directly! Use templates.copy to create an instance instead.");
-      }
-      super();
-      // eslint-disable-next-line no-empty-function, class-methods-use-this
-      this.onchange = () => {
-      };
-      // eslint-disable-next-line no-empty-function, class-methods-use-this
-      this.oninput = () => {
-      };
-      this.#pointerUp = (e) => {
-        if (e.target !== this) {
-          this.blur();
-        }
-      };
-      this.#submitHandler = (e) => {
-        if (e.key === "Enter" && this.#focused) {
-          this.#setFocused(false);
-          e.preventDefault();
-        }
-      };
-      this.#repositionRestyleInput = () => {
-        const { isUi } = this.getRoom();
-        const x1 = this.x, y1 = this.y, x2 = this.x + this.width, y2 = this.y + this.height;
-        const scalar = isUi ? u_default.uiToCssScalar : u_default.gameToCssScalar, coord = isUi ? u_default.uiToCssCoord : u_default.gameToCssCoord;
-        const lt = coord(x1, y1), br = coord(x2, y2);
-        const textStyle = this.style;
-        Object.assign(this.#htmlInput.style, {
-          fontFamily: textStyle.fontFamily,
-          fontSize: scalar(textStyle.fontSize) + "px",
-          left: lt.x + "px",
-          top: lt.y + "px",
-          width: br.x - lt.x + "px",
-          height: br.y - lt.y + "px",
-          lineHeight: br.y - lt.y + "px",
-          color: Array.isArray(textStyle.fill) ? textStyle.fill[0] : textStyle.fill
-        });
-        if (textStyle.strokeThickness) {
-          this.#htmlInput.style.textStroke = `${scalar(textStyle.strokeThickness / 2)}px ${textStyle.stroke}`;
-          this.#htmlInput.style.webkitTextStroke = this.#htmlInput.style.textStroke;
-        } else {
-          this.#htmlInput.style.textStroke = this.#htmlInput.style.webkitTextStroke = "unset";
-        }
-        if ("dropShadow" in textStyle) {
-          const angle = u_default.radToDeg(textStyle.dropShadowAngle ?? 0);
-          let x = u_default.ldx(textStyle.dropShadowDistance ?? 0, angle), y = u_default.ldy(textStyle.dropShadowDistance ?? 0, angle);
-          x = scalar(x);
-          y = scalar(y);
-          const css = `${x}px ${y}px ${scalar(textStyle.dropShadowBlur ?? 0)}px ${textStyle.dropShadowColor}`;
-          this.#htmlInput.style.textShadow = `${css}, ${css}`;
-        }
-        if (this.selectionColor) {
-          cssStyle.innerHTML = `
-                ::selection {
-                    background: ${this.selectionColor};
-                }
-            `;
-        } else {
-          cssStyle.innerHTML = "";
-        }
-      };
-      forceDestroy.add(this);
-      this.normalTexture = res_default.getTexture(t.texture, 0);
-      this.hoverTexture = t.hoverTexture ? res_default.getTexture(t.hoverTexture, 0) : this.normalTexture;
-      this.pressedTexture = t.pressedTexture ? res_default.getTexture(t.pressedTexture, 0) : this.normalTexture;
-      this.disabledTexture = t.disabledTexture ? res_default.getTexture(t.disabledTexture, 0) : this.normalTexture;
-      this.panel = new PIXI.NineSlicePlane(
-        this.normalTexture,
-        t.nineSliceSettings?.left ?? 16,
-        t.nineSliceSettings?.top ?? 16,
-        t.nineSliceSettings?.right ?? 16,
-        t.nineSliceSettings?.bottom ?? 16
-      );
-      this.maxLength = t.maxTextLength ?? 0;
-      this.fieldType = t.fieldType ?? "text";
-      const style = t.textStyle === -1 ? PIXI.TextStyle.defaultStyle : styles_default.get(t.textStyle, true);
-      if (exts.customSize) {
-        style.fontSize = Number(exts.customSize);
-      }
-      let text = exts.customText || t.defaultText || "";
-      this.#text = text;
-      if (this.fieldType === "password") {
-        text = "\u2022".repeat(text.length);
-      }
-      this.style = {
-        ...style,
-        fontSize: Number(style.fontSize),
-        fontName: style.fontFamily.split(",")[0].trim()
-      };
-      if (t.useBitmapText) {
-        this.textLabel = new PIXI.BitmapText(exts.customText || t.defaultText || "", this.style);
-        this.textLabel.tint = new PIXI.Color(style.fill);
-      } else {
-        this.textLabel = new PIXI.Text(exts.customText || t.defaultText || "", this.style);
-      }
-      this.textLabel.anchor.set(0.5);
-      this.addChild(this.panel, this.textLabel);
-      if (t.selectionColor) {
-        this.selectionColor = t.selectionColor;
-      }
-      this.eventMode = "dynamic";
-      this.cursor = "pointer";
-      this.on("pointerenter", this.hover);
-      this.on("pointerentercapture", this.hover);
-      this.on("pointerleave", this.unhover);
-      this.on("pointerleavecapture", this.unhover);
-      this.on("pointerdown", this.press);
-      this.on("pointerdowncapture", this.press);
-      this.on("pointerup", this.hover);
-      this.on("pointerupcapture", this.hover);
-      this.on("pointerupoutside", this.unhover);
-      this.on("pointerupoutsidecapture", this.unhover);
-      this.updateNineSliceShape = t.nineSliceSettings.autoUpdate;
-      let baseWidth = this.panel.width, baseHeight = this.panel.height;
-      if ("scaleX" in exts) {
-        baseWidth *= exts.scaleX;
-      }
-      if ("scaleY" in exts) {
-        baseHeight *= exts.scaleY;
-      }
-      this.resize(baseWidth, baseHeight);
-      u_default.reshapeNinePatch(this);
-      this.#disabled = false;
-      this.#focused = false;
-      this.#htmlInput = document.createElement("input");
-      this.#htmlInput.type = "text";
-      this.#htmlInput.className = "aCtJsTextboxInput";
-      this.#htmlInput.addEventListener("click", (e) => {
-        e.stopPropagation();
-      });
-      this.#htmlInput.addEventListener("pointerup", (e) => {
-        e.stopPropagation();
-      });
-      this.#htmlInput.addEventListener("input", () => {
-        this.oninput(this.#htmlInput.value);
-      });
-      this.#htmlInput.addEventListener("blur", () => {
-        this.#setFocused(false);
-      });
-      this.on("pointerup", () => {
-        this.#setFocused(true);
-      });
-    }
-    #disabled;
-    get disabled() {
-      return this.#disabled;
-    }
-    set disabled(val) {
-      this.#disabled = val;
-      if (val) {
-        this.panel.texture = this.disabledTexture;
-        this.eventMode = "none";
-      } else {
-        this.panel.texture = this.normalTexture;
-        this.eventMode = "auto";
-      }
-    }
-    #focused;
-    #prevPreventDefault;
-    get isFocused() {
-      return this.#focused;
-    }
-    #setFocused(val) {
-      if (val === this.#focused) {
-        return;
-      }
-      this.#focused = val;
-      if (val) {
-        if (this.#disabled) {
-          this.#focused = false;
-          return;
-        }
-        setFocusedElement(this);
-        this.panel.texture = this.pressedTexture ?? this.hoverTexture ?? this.normalTexture;
-        this.#repositionRestyleInput();
-        if (this.maxLength > 0) {
-          this.#htmlInput.maxLength = this.maxLength;
-        } else {
-          this.#htmlInput.maxLength = 524288;
-        }
-        this.#htmlInput.type = this.fieldType || "text";
-        this.#htmlInput.value = this.text;
-        document.body.appendChild(this.#htmlInput);
-        this.#htmlInput.focus();
-        this.textLabel.alpha = 0;
-        try {
-          this.#prevPreventDefault = settings.preventDefault;
-          settings.preventDefault = false;
-        } catch (oO) {
-        }
-        document.addEventListener("keydown", this.#submitHandler);
-        window.addEventListener("resize", this.#repositionRestyleInput);
-        pixiApp.stage.off("pointerup", this.#pointerUp);
-      } else {
-        this.panel.texture = this.normalTexture;
-        this.text = this.#htmlInput.value;
-        document.body.removeChild(this.#htmlInput);
-        this.textLabel.alpha = 1;
-        try {
-          settings.preventDefault = this.#prevPreventDefault;
-        } catch (oO) {
-        }
-        this.onchange(this.text);
-        document.removeEventListener("keydown", this.#submitHandler);
-        window.removeEventListener("resize", this.#repositionRestyleInput);
-        pixiApp.stage.on("pointerup", this.#pointerUp);
-      }
-    }
-    blur() {
-      this.#setFocused(false);
-    }
-    focus() {
-      this.#setFocused(true);
-    }
-    #htmlInput;
-    #pointerUp;
-    #submitHandler;
-    #repositionRestyleInput;
-    #text;
-    get text() {
-      return this.#text;
-    }
-    set text(val) {
-      this.#text = val;
-      if (this.fieldType === "password") {
-        this.textLabel.text = "\u2022".repeat(val.length);
-      } else {
-        this.textLabel.text = val;
-      }
-    }
-    destroy(options) {
-      forceDestroy.delete(this);
-      if (this.#focused) {
-        this.#setFocused(false);
-      }
-      super.destroy(options);
-    }
-    unsize() {
-      const { x, y } = this.scale;
-      this.panel.scale.x *= x;
-      this.panel.scale.y *= y;
-      this.scale.set(1);
-      this.textLabel.x = this.panel.width / 2;
-      this.textLabel.y = this.panel.height / 2;
-    }
-    resize(newWidth, newHeight) {
-      this.panel.width = newWidth;
-      this.panel.height = newHeight;
-      this.textLabel.x = newWidth / 2;
-      this.textLabel.y = newHeight / 2;
-    }
-    hover() {
-      if (this.disabled) {
-        return;
-      }
-      this.panel.texture = this.hoverTexture;
-    }
-    unhover() {
-      if (this.disabled) {
-        return;
-      }
-      this.panel.texture = this.normalTexture;
-    }
-    press() {
-      if (this.disabled) {
-        return;
-      }
-      this.panel.texture = this.pressedTexture;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/PixiNineSlicePlane.ts
-  var PixiPanel = class extends PIXI.NineSlicePlane {
-    constructor(t, exts) {
-      if (t?.baseClass !== "NineSlicePlane") {
-        throw new Error("Don't call PixiPanel class directly! Use templates.copy to create an instance instead.");
-      }
-      const tex = res_default.getTexture(t.texture, 0);
-      super(
-        tex,
-        t.nineSliceSettings?.left ?? 16,
-        t.nineSliceSettings?.top ?? 16,
-        t.nineSliceSettings?.right ?? 16,
-        t.nineSliceSettings?.bottom ?? 16
-      );
-      this.baseClass = "NineSlicePlane";
-      this.updateNineSliceShape = t.nineSliceSettings.autoUpdate;
-      const baseWidth = this.width, baseHeight = this.height;
-      if ("scaleX" in exts) {
-        this.width = baseWidth * exts.scaleX;
-      }
-      if ("scaleY" in exts) {
-        this.height = baseHeight * exts.scaleY;
-      }
-      u_default.reshapeNinePatch(this);
-      this.blendMode = t.blendMode || PIXI.BLEND_MODES.NORMAL;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/PixiText.ts
-  var PixiText = class extends PIXI.Text {
-    constructor(t, exts) {
-      if (t?.baseClass !== "Text") {
-        throw new Error("Don't call PixiText class directly! Use templates.copy to create an instance instead.");
-      }
-      let style;
-      if (t.textStyle && t.textStyle !== -1) {
-        style = styles_default.get(t.textStyle, true);
-      } else {
-        style = {};
-      }
-      if (exts.customWordWrap) {
-        style.wordWrap = true;
-        style.wordWrapWidth = Number(exts.customWordWrap);
-      }
-      if (exts.customSize) {
-        style.fontSize = Number(exts.customSize);
-      }
-      super(
-        exts.customText || t.defaultText || "",
-        style
-      );
-      if (exts.customAnchor) {
-        const anchor = exts.customAnchor;
-        this.anchor.set(anchor?.x ?? 0, anchor?.y ?? 0);
-      }
-      this.shape = u_default.getRectShape(this);
-      this.scale.set(
-        exts.scaleX ?? 1,
-        exts.scaleY ?? 1
-      );
-      return this;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/PixiBitmapText.ts
-  var PixiBitmapText = class extends PIXI.BitmapText {
-    constructor(t, exts) {
-      if (t?.baseClass !== "BitmapText") {
-        throw new Error("Don't call PixiBitmapText class directly! Use templates.copy to create an instance instead.");
-      }
-      let style;
-      if (t.textStyle && t.textStyle !== -1) {
-        style = styles_default.get(t.textStyle, true);
-      } else {
-        style = {};
-      }
-      if (exts.customWordWrap) {
-        style.wordWrap = true;
-        style.wordWrapWidth = Number(exts.customWordWrap);
-      }
-      if (exts.customSize) {
-        style.fontSize = Number(exts.customSize);
-      }
-      super(
-        exts.customText || t.defaultText || "",
-        {
-          ...style,
-          fontName: style.fontFamily.split(",")[0].trim(),
-          tint: new PIXI.Color(style.fill)
-        }
-      );
-      this.tint = new PIXI.Color(style.fill);
-      if (exts.customAnchor) {
-        const anchor = exts.customAnchor;
-        this.anchor.set(anchor?.x ?? 0, anchor?.y ?? 0);
-      }
-      this.shape = u_default.getRectShape(this);
-      this.scale.set(
-        exts.scaleX ?? 1,
-        exts.scaleY ?? 1
-      );
-      return this;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/PixiContainer.ts
-  var PixiContainer = class extends PIXI.Container {
-    constructor() {
-      super();
-      this.shape = {
-        type: "point"
-      };
-      return this;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/PixiAnimatedSprite.ts
-  var PixiAnimateSprite = class extends PIXI.AnimatedSprite {
-    constructor(t, exts) {
-      if (t?.baseClass !== "AnimatedSprite") {
-        throw new Error("Don't call PixiButton class directly! Use templates.copy to create an instance instead.");
-      }
-      const textures = res_default.getTexture(t.texture);
-      super(textures);
-      this.anchor.x = t.anchorX ?? textures[0].defaultAnchor.x ?? 0;
-      this.anchor.y = t.anchorY ?? textures[0].defaultAnchor.y ?? 0;
-      this.scale.set(
-        exts.scaleX ?? 1,
-        exts.scaleY ?? 1
-      );
-      this.blendMode = t.blendMode || PIXI.BLEND_MODES.NORMAL;
-      this.loop = t.loopAnimation;
-      this.animationSpeed = t.animationFPS / 60;
-      if (t.playAnimationOnStart) {
-        this.play();
-      }
-      return this;
-    }
-  };
-
-  // src/ct.release/templateBaseClasses/index.ts
-  var baseClassToPixiClass = {
-    AnimatedSprite: PixiAnimateSprite,
-    Button: PixiButton,
-    Container: PixiContainer,
-    NineSlicePlane: PixiPanel,
-    RepeatingTexture: PixiScrollingTexture,
-    // ScrollBox: PixiScrollBox,
-    SpritedCounter: PixiSpritedCounter,
-    Text: PixiText,
-    BitmapText: PixiBitmapText,
-    TextBox: PixiTextBox
-  };
-
-  // src/ct.release/templates.ts
-  var uid = 0;
-  var focusedElement;
-  var blurFocusedElement = () => {
-    focusedElement.blur();
-  };
-  var setFocusedElement = (elt) => {
-    if (focusedElement && focusedElement !== elt) {
-      blurFocusedElement();
-    }
-    focusedElement = elt;
-  };
-  var CopyProto = {
-    set tex(value) {
-      if (this._tex === value) {
-        return;
-      }
-      var { playing } = this;
-      this.textures = res_default.getTexture(value);
-      [this.texture] = this.textures;
-      this._tex = value;
-      this.shape = res_default.getTextureShape(value);
-      this.hitArea = this.textures.hitArea;
-      if (this.anchor) {
-        this.anchor.x = this.textures[0].defaultAnchor.x;
-        this.anchor.y = this.textures[0].defaultAnchor.y;
-        if (playing) {
-          this.play();
-        }
-      }
-      if ("_bottomHeight" in this) {
-        u_default.reshapeNinePatch(this);
-      }
-    },
-    get tex() {
-      return this._tex;
-    },
-    get speed() {
-      return Math.hypot(this.hspeed, this.vspeed);
-    },
-    set speed(value) {
-      if (value === 0) {
-        this._zeroDirection = this.direction;
-        this.hspeed = this.vspeed = 0;
-        return;
-      }
-      if (this.speed === 0) {
-        const restoredDir = this._zeroDirection;
-        this._hspeed = value * Math.cos(restoredDir * Math.PI / 180);
-        this._vspeed = value * Math.sin(restoredDir * Math.PI / 180);
-        return;
-      }
-      var multiplier = value / this.speed;
-      this.hspeed *= multiplier;
-      this.vspeed *= multiplier;
-    },
-    get hspeed() {
-      return this._hspeed;
-    },
-    set hspeed(value) {
-      if (this.vspeed === 0 && value === 0) {
-        this._zeroDirection = this.direction;
-      }
-      this._hspeed = value;
-    },
-    get vspeed() {
-      return this._vspeed;
-    },
-    set vspeed(value) {
-      if (this.hspeed === 0 && value === 0) {
-        this._zeroDirection = this.direction;
-      }
-      this._vspeed = value;
-    },
-    get direction() {
-      if (this.speed === 0) {
-        return this._zeroDirection;
-      }
-      return (Math.atan2(this.vspeed, this.hspeed) * 180 / Math.PI + 360) % 360;
-    },
-    set direction(value) {
-      this._zeroDirection = value;
-      if (this.speed > 0) {
-        var { speed } = this;
-        this.hspeed = speed * Math.cos(value * Math.PI / 180);
-        this.vspeed = speed * Math.sin(value * Math.PI / 180);
-      }
-    },
-    move() {
-      if (this.gravity) {
-        this.hspeed += this.gravity * u_default.time * Math.cos(this.gravityDir * Math.PI / 180);
-        this.vspeed += this.gravity * u_default.time * Math.sin(this.gravityDir * Math.PI / 180);
-      }
-      this.x += this.hspeed * u_default.time;
-      this.y += this.vspeed * u_default.time;
-    },
-    addSpeed(spd, dir) {
-      this.hspeed += spd * Math.cos(dir * Math.PI / 180);
-      this.vspeed += spd * Math.sin(dir * Math.PI / 180);
-    },
-    getRoom() {
-      let { parent } = this;
-      while (!(parent instanceof Room)) {
-        ({ parent } = parent);
-      }
-      return parent;
-    },
-    onBeforeCreateModifier() {
-      
-      /*!@onbeforecreate@*/
-    }
-  };
-  var assignExtends = (target, exts) => {
-    let { tint } = target;
-    if (exts.tint || exts.tint === 0) {
-      tint = new PIXI.Color(target.tint).multiply(exts.tint).toNumber();
-    }
-    Object.assign(target, exts);
-    target.tint = tint;
-  };
-  var Copy = function(x, y, template, container, exts) {
-    container = container || rooms_default.current;
-    this[copyTypeSymbol] = true;
-    if (template) {
-      this.baseClass = template.baseClass;
-      this.parent = container;
-      if (template.baseClass === "AnimatedSprite" || template.baseClass === "NineSlicePlane") {
-        this._tex = template.texture || -1;
-      }
-      this.behaviors = [...template.behaviors];
-      if (template.visible === false) {
-        this.visible = false;
-      }
-    } else {
-      this.behaviors = [];
-    }
-    const oldScale = this.scale;
-    Object.defineProperty(this, "scale", {
-      get: () => oldScale,
-      set: (value) => {
-        this.scale.x = this.scale.y = Number(value);
-      }
-    });
-    this[copyTypeSymbol] = true;
-    this.xprev = this.xstart = this.x = x;
-    this.yprev = this.ystart = this.y = y;
-    this._hspeed = 0;
-    this._vspeed = 0;
-    this._zeroDirection = 0;
-    this.gravity = 0;
-    this.gravityDir = 90;
-    this.zIndex = 0;
-    this.timer1 = this.timer2 = this.timer3 = this.timer4 = this.timer5 = this.timer6 = 0;
-    this.uid = ++uid;
-    if (template) {
-      Object.assign(this, {
-        template: template.name,
-        zIndex: template.depth,
-        onStep: template.onStep,
-        onDraw: template.onDraw,
-        onBeforeCreateModifier: CopyProto.onBeforeCreateModifier,
-        onCreate: template.onCreate,
-        onDestroy: template.onDestroy
-      });
-      this.zIndex = template.depth;
-      Object.assign(this, template.extends);
-      if (exts) {
-        assignExtends(this, exts);
-      }
-      if ("texture" in template && !this.shape) {
-        this.shape = res_default.getTextureShape(template.texture || -1);
-        if (typeof template.texture === "string") {
-          this.hitArea = res_default.getTexture(template.texture).hitArea;
-        }
-      }
-      if (templatesLib.list[template.name]) {
-        templatesLib.list[template.name].push(this);
-      } else {
-        templatesLib.list[template.name] = [this];
-      }
-      this.onBeforeCreateModifier.apply(this);
-      templatesLib.templates[template.name].onCreate.apply(this);
-      onCreateModifier.apply(this);
-    } else if (exts) {
-      assignExtends(this, exts);
-      this.onBeforeCreateModifier.apply(this);
-      onCreateModifier.apply(this);
-    }
-    if (!this.shape) {
-      this.shape = res_default.getTextureShape(-1);
-    }
-    if (this.behaviors.length) {
-      runBehaviors(this, "templates", "thisOnCreate");
-    }
-    return this;
-  };
-  var mix = (target, x, y, template, parent, exts) => {
-    const proto = CopyProto;
-    const properties = Object.getOwnPropertyNames(proto);
-    for (const i in properties) {
-      if (properties[i] !== "constructor") {
-        Object.defineProperty(
-          target,
-          properties[i],
-          Object.getOwnPropertyDescriptor(proto, properties[i])
-        );
-      }
-    }
-    Copy.apply(target, [x, y, template, parent, exts]);
-  };
-  var makeCopy = (template, x, y, parent, exts) => {
-    if (!(template in templatesLib.templates)) {
-      throw new Error(`[ct.templates] An attempt to create a copy of a non-existent template \`${template}\` detected. A typo?`);
-    }
-    const t = templatesLib.templates[template];
-    if (!(t.baseClass in baseClassToPixiClass)) {
-      throw new Error(`[internal -> makeCopy] Unknown base class \`${t.baseClass}\` for template \`${template}\`.`);
-    }
-    const copy = new baseClassToPixiClass[t.baseClass](t, exts);
-    mix(copy, x, y, t, parent, exts);
-    return copy;
-  };
-  var killRecursive = (copy) => {
-    copy.kill = true;
-    if (templatesLib.isCopy(copy) && copy.onDestroy) {
-      templatesLib.onDestroy.apply(copy);
-      copy.onDestroy.apply(copy);
-    }
-    if (copy.children) {
-      for (const child of copy.children) {
-        if (templatesLib.isCopy(child)) {
-          killRecursive(child);
-        }
-      }
-    }
-    const stackIndex = stack.indexOf(copy);
-    if (stackIndex !== -1) {
-      stack.splice(stackIndex, 1);
-    }
-    if (templatesLib.isCopy(copy) && copy.template) {
-      if (copy.template) {
-        const { template } = copy;
-        if (template) {
-          const templatelistIndex = templatesLib.list[template].indexOf(copy);
-          if (templatelistIndex !== -1) {
-            templatesLib.list[template].splice(templatelistIndex, 1);
-          }
-        }
-      }
-    }
-    deadPool.push(copy);
-  };
-  var onCreateModifier = function() {
-    this.$chashes = place.getHashes(this);
-for (const hash of this.$chashes) {
-    if (!(hash in place.grid)) {
-        place.grid[hash] = [this];
-    } else {
-        place.grid[hash].push(this);
-    }
-}
-if ([false][0] && templates.isCopy(this)) {
-    this.$cDebugText = new PIXI.Text('Not initialized', {
-        fill: 0xffffff,
-        dropShadow: true,
-        dropShadowDistance: 2,
-        fontSize: [][0] || 16
-    });
-    this.$cDebugCollision = new PIXI.Graphics();
-    this.addChild(this.$cDebugCollision, this.$cDebugText);
-}
-
-  };
-  var templatesLib = {
-    /**
-     * @catnipIgnore
-     */
-    CopyProto,
-    /**
-     * @catnipIgnore
-     */
-    Background,
-    /**
-     * @catnipIgnore
-     */
-    Tilemap,
-    /**
-     * An object that contains arrays of copies of all templates.
-     * @catnipList template
-     */
-    list: {
-      BACKGROUND: [],
-      TILEMAP: []
-    },
-    /**
-     * A map of all the templates of templates exported from ct.IDE.
-     * @catnipIgnore
-     */
-    templates: {},
-    /**
-     * Creates a new copy of a given template inside the current root room.
-     * A shorthand for `templates.copyIntoRoom(template, x, y, rooms.current, exts)`
-     * @param template The name of the template to use
-     * @catnipAsset template:template
-     * @param [x] The x coordinate of a new copy. Defaults to 0.
-     * @param [y] The y coordinate of a new copy. Defaults to 0.
-     * @param [params] An optional object which parameters will be applied
-     * to the copy prior to its OnCreate event.
-     * @returns The created copy.
-     * @catnipSaveReturn
-     * @catnipIgnore
-     */
-    copy(template, x = 0, y = 0, params = {}) {
-      if (!rooms_default.current) {
-        throw new Error("[emitters.fire] An attempt to create a copy before the main room is created.");
-      }
-      return templatesLib.copyIntoRoom(template, x, y, rooms_default.current, params);
-    },
-    /**
-     * Creates a new copy of a given template inside a specific room.
-     * @param template The name of the template to use
-     * @catnipAsset template:template
-     * @param [x] The x coordinate of a new copy. Defaults to 0.
-     * @param [y] The y coordinate of a new copy. Defaults to 0.
-     * @param [room] The room to which add the copy.
-     * Defaults to the current room.
-     * @param [params] An optional object which parameters will be applied
-     * to the copy prior to its OnCreate event.
-     * @returns The created copy.
-     * @catnipSaveReturn
-     * @catnipIgnore
-     */
-    // eslint-disable-next-line max-len
-    copyIntoRoom(template, x = 0, y = 0, room, params = {}) {
-      if (!room || !(room instanceof Room)) {
-        throw new Error(`Attempt to spawn a copy of template ${template} inside an invalid room. Room's value provided: ${room}`);
-      }
-      const obj = makeCopy(template, x, y, room, params);
-      room.addChild(obj);
-      stack.push(obj);
-      return obj;
-    },
-    /**
-     * Applies a function to each copy in the current room
-     * @param {Function} func The function to apply
-     * @catnipIcon crosshair
-     * @returns {void}
-     */
-    each(func) {
-      for (const copy of stack) {
-        if (!copy[copyTypeSymbol]) {
-          continue;
-        }
-        func.call(copy, copy);
-      }
-    },
-    /**
-     * Applies a function to a given object (e.g. to a copy)
-     * @param {Copy} obj The copy to perform function upon.
-     * @param {Function} function The function to be applied.
-     * @catnipIcon crosshair
-     */
-    withCopy(obj, func) {
-      func.apply(obj, this);
-    },
-    /**
-     * Applies a function to every copy of the given template name
-     * @param {string} template The name of the template to perform function upon.
-     * @catnipAsset template:template
-     * @param {Function} function The function to be applied.
-     * @catnipIcon crosshair
-     */
-    withTemplate(template, func) {
-      for (const copy of templatesLib.list[template]) {
-        func.apply(copy, this);
-      }
-    },
-    /**
-     * Checks whether there are any copies of this template's name.
-     * Will throw an error if you pass an invalid template name.
-     * @param {string} template The name of a template to check.
-     * @catnipAsset template:template
-     * @returns {boolean} Returns `true` if at least one copy exists in a room;
-     * `false` otherwise.
-     */
-    exists(template) {
-      if (!(template in templatesLib.templates)) {
-        throw new Error(`[ct.templates] templates.exists: There is no such template ${template}.`);
-      }
-      return templatesLib.list[template].length > 0;
-    },
-    /**
-     * Checks whether a given object is a ct.js copy.
-     * @param {any} obj The object which needs to be checked.
-     * @returns {boolean} Returns `true` if the passed object is a copy; `false` otherwise.
-     * @catnipIgnore
-     */
-    isCopy: (obj) => obj && obj[copyTypeSymbol],
-    /**
-     * Checks whether a given object exists in game's world.
-     * Intended to be applied to copies, but may be used with other PIXI entities.
-     * @catnipIgnore
-     */
-    valid: (obj) => {
-      if (typeof obj !== "object" || obj === null) {
-        return false;
-      }
-      if (copyTypeSymbol in obj) {
-        return !obj.kill;
-      }
-      if (obj instanceof PIXI.DisplayObject) {
-        return Boolean(obj.position);
-      }
-      return false;
-    },
-    /**
-     * @catnipIgnore
-     */
-    beforeStep() {
-      
-    },
-    /**
-     * @catnipIgnore
-     */
-    afterStep() {
-      
-      if (this.behaviors.length) {
-        runBehaviors(this, "templates", "thisOnStep");
-      }
-    },
-    /**
-     * @catnipIgnore
-     */
-    beforeDraw() {
-      if ([false][0] && templates.isCopy(this)) {
-    const inverse = this.transform.localTransform.clone().invert();
-    this.$cDebugCollision.transform.setFromMatrix(inverse);
-    this.$cDebugCollision.position.set(0, 0);
-    this.$cDebugText.transform.setFromMatrix(inverse);
-    this.$cDebugText.position.set(0, 0);
-
-    const newtext = `Partitions: ${this.$chashes.join(', ')}
-CGroup: ${this.cgroup || 'unset'}
-Shape: ${(this._shape && this._shape.__type) || 'unused'}`;
-    if (this.$cDebugText.text !== newtext) {
-        this.$cDebugText.text = newtext;
-    }
-    this.$cDebugCollision
-    .clear();
-    place.drawDebugGraphic.apply(this);
-    this.$cHadCollision = false;
-}
-
-    },
-    /**
-     * @catnipIgnore
-     */
-    afterDraw() {
-      if (this.behaviors.length) {
-        runBehaviors(this, "templates", "thisOnDraw");
-      }
-      if (this.baseClass === "Button" && (this.scale.x !== 1 || this.scale.y !== 1)) {
-        this.unsize();
-      }
-      if (this.updateNineSliceShape) {
-        if (this.prevWidth !== this.width || this.prevHeight !== this.height) {
-          this.prevWidth = this.width;
-          this.prevHeight = this.height;
-          u_default.reshapeNinePatch(this);
-        }
-      }
-      /* eslint-disable no-underscore-dangle */
-if ((this.transform && (this.transform._localID !== this.transform._currentLocalID)) ||
-    this.x !== this.xprev ||
-    this.y !== this.yprev
-) {
-    delete this._shape;
-    const oldHashes = this.$chashes || [];
-    this.$chashes = place.getHashes(this);
-    for (const hash of oldHashes) {
-        if (this.$chashes.indexOf(hash) === -1) {
-            place.grid[hash].splice(place.grid[hash].indexOf(this), 1);
-        }
-    }
-    for (const hash of this.$chashes) {
-        if (oldHashes.indexOf(hash) === -1) {
-            if (!(hash in place.grid)) {
-                place.grid[hash] = [this];
-            } else {
-                place.grid[hash].push(this);
-            }
-        }
-    }
-}
-
-    },
-    /**
-     * @catnipIgnore
-     */
-    onDestroy() {
-      if (this.$chashes) {
-    for (const hash of this.$chashes) {
-        place.grid[hash].splice(place.grid[hash].indexOf(this), 1);
-    }
-}
-
-      if (this.behaviors.length) {
-        runBehaviors(this, "templates", "thisOnDestroy");
-      }
-    }
-  };
-  var templates_default = templatesLib;
-
   // src/ct.release/camera.ts
   var shakeCamera = function shakeCamera2(camera2, time) {
     camera2.shake -= time * camera2.shakeDecay;
@@ -2870,11 +2420,14 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
     }
     // Dummying unneeded methods that need implementation in non-abstract classes of DisplayObject
     render() {
+      void this;
     }
     // Can't have children as it is not a container
     removeChild() {
+      void this;
     }
     calculateBounds() {
+      void this;
     }
     /**
      * Moves the camera to a new position. It will have a smooth transition
@@ -3684,6 +3237,32 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
      */
     getStringNumber(str) {
       return Number(str.split("_").pop());
+    },
+    /**
+     * A helper method to loop over enumeration's keys.
+     * @param en Enumeration to loop over
+     * @param predicate A function that will be executed with enumeration's name at each iteration
+     * @catnipIgnore
+     */
+    eachEnumName(en, predicate) {
+      for (const key of Object.values(en)) {
+        if (typeof key === "string") {
+          predicate(key);
+        }
+      }
+    },
+    /**
+     * A helper method to loop over enumeration's values.
+     * @param en Enumeration to loop over
+     * @param predicate A function that will be executed with enumeration's value at each iteration
+     * @catnipIgnore
+     */
+    eachEnumValue(en, predicate) {
+      for (const key of Object.values(en)) {
+        if (typeof key === "number") {
+          predicate(key);
+        }
+      }
     }
   };
   Object.assign(uLib, {
@@ -3697,6 +3276,478 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
     pointCircle: uLib.pcircle
   });
   var u_default = uLib;
+
+  // src/ct.release/res.ts
+  var loadingScreen = document.querySelector(".ct-aLoadingScreen");
+  var loadingBar = loadingScreen.querySelector(".ct-aLoadingBar");
+  var normalizeAssetPath = (path) => {
+    path = path.replace(/\\/g, "/");
+    if (path[0] === "/") {
+      path = path.slice(1);
+    }
+    return path.split("/").filter((empty) => empty);
+  };
+  var getEntriesByPath = (nPath) => {
+    if (!resLib.tree) {
+      throw new Error("[res] Asset tree was not exported; check your project's export settings.");
+    }
+    let current = resLib.tree;
+    for (const subpath of nPath) {
+      const folder = current.find((i) => i.name === subpath && i.type === "folder");
+      if (!folder) {
+        throw new Error(`[res] Could not find folder ${subpath} in path ${nPath.join("/")}`);
+      }
+      current = folder.entries;
+    }
+    return current;
+  };
+  var resLib = {
+    sounds: soundMap,
+    pixiSounds: pixiSoundInstances,
+    textures: {},
+    tree: [
+      false
+    ][0],
+    /**
+     * Loads and executes a script by its URL
+     * @param {string} url The URL of the script file, with its extension.
+     * Can be relative or absolute.
+     * @returns {Promise<void>}
+     * @async
+     */
+    loadScript(url = required("url", "ct.res.loadScript")) {
+      var script = document.createElement("script");
+      script.src = url;
+      const promise = new Promise((resolve, reject) => {
+        script.onload = () => {
+          resolve();
+        };
+        script.onerror = () => {
+          reject();
+        };
+      });
+      document.getElementsByTagName("head")[0].appendChild(script);
+      return promise;
+    },
+    /**
+     * Loads an individual image as a named ct.js texture.
+     * @param {string|boolean} url The path to the source image.
+     * @param {string} name The name of the resulting ct.js texture
+     * as it will be used in your code.
+     * @param {ITextureOptions} textureOptions Information about texture's axis
+     * and collision shape.
+     * @returns {Promise<CtjsAnimation>} The imported animation, ready to be used.
+     */
+    async loadTexture(url = required("url", "ct.res.loadTexture"), name = required("name", "ct.res.loadTexture"), textureOptions = {}) {
+      let texture;
+      try {
+        texture = await PIXI.Assets.load(url);
+      } catch (e) {
+        console.error(`[ct.res] Could not load image ${url}`);
+        throw e;
+      }
+      const ctTexture = [texture];
+      ctTexture.shape = texture.shape = textureOptions.shape || {};
+      texture.defaultAnchor = ctTexture.defaultAnchor = new PIXI.Point(
+        textureOptions.anchor ? textureOptions.anchor.x : 0,
+        textureOptions.anchor ? textureOptions.anchor.y : 0
+      );
+      const hitArea = u_default.getHitArea(texture.shape);
+      if (hitArea) {
+        texture.hitArea = ctTexture.hitArea = hitArea;
+      }
+      resLib.textures[name] = ctTexture;
+      return ctTexture;
+    },
+    /**
+     * Loads a Texture Packer compatible .json file with its source image,
+     * adding ct.js textures to the game.
+     * @param {string} url The path to the JSON file that describes the atlas' textures.
+     * @returns A promise that resolves into an array
+     * of all the loaded textures' names.
+     */
+    async loadAtlas(url = required("url", "ct.res.loadAtlas")) {
+      const sheet = await PIXI.Assets.load(url);
+      for (const animation in sheet.animations) {
+        const tex = sheet.animations[animation];
+        const animData = sheet.data.animations;
+        for (let i = 0, l = animData[animation].length; i < l; i++) {
+          const a = animData[animation], f = a[i];
+          tex[i].shape = sheet.data.frames[f].shape;
+        }
+        tex.shape = tex[0].shape || {};
+        resLib.textures[animation] = tex;
+        const hitArea = u_default.getHitArea(resLib.textures[animation].shape);
+        if (hitArea) {
+          resLib.textures[animation].hitArea = hitArea;
+          for (const frame of resLib.textures[animation]) {
+            frame.hitArea = hitArea;
+          }
+        }
+      }
+      return Object.keys(sheet.animations);
+    },
+    /**
+     * Unloads the specified atlas by its URL and removes all the textures
+     * it has introduced to the game.
+     * Will do nothing if the specified atlas was not loaded (or was already unloaded).
+     */
+    async unloadAtlas(url = required("url", "ct.res.unloadAtlas")) {
+      const { animations } = PIXI.Assets.get(url);
+      if (!animations) {
+        console.log(`[ct.res] Attempt to unload an atlas that was not loaded/was unloaded already: ${url}`);
+        return;
+      }
+      for (const animation of animations) {
+        delete resLib.textures[animation];
+      }
+      await PIXI.Assets.unload(url);
+    },
+    /**
+     * Loads a bitmap font by its XML file.
+     * @param url The path to the XML file that describes the bitmap fonts.
+     * @returns A promise that resolves into the font's name (the one you've passed with `name`).
+     */
+    async loadBitmapFont(url = required("url", "ct.res.loadBitmapFont")) {
+      await PIXI.Assets.load(url);
+    },
+    async unloadBitmapFont(url = required("url", "ct.res.unloadBitmapFont")) {
+      await PIXI.Assets.unload(url);
+    },
+    /**
+     * Loads a sound.
+     * @param path Path to the sound
+     * @param name The name of the sound as it will be used in ct.js game.
+     * @param preload Whether to start loading now or postpone it.
+     * Postponed sounds will load when a game tries to play them, or when you manually
+     * trigger the download with `sounds.load(name)`.
+     * @returns A promise with the name of the imported sound.
+     */
+    loadSound(path = required("path", "ct.res.loadSound"), name = required("name", "ct.res.loadSound"), preload = true) {
+      return new Promise((resolve, reject) => {
+        const opts = {
+          url: path,
+          preload
+        };
+        if (preload) {
+          opts.loaded = (err) => {
+            if (err) {
+              reject(err);
+            } else {
+              resLib.pixiSounds[name] = asset;
+              resolve(name);
+            }
+          };
+        }
+        const asset = PIXI.sound.add(name, opts);
+        if (!preload) {
+          resolve(name);
+        }
+      });
+    },
+    async loadGame() {
+      const changeProgress = (percents) => {
+        loadingScreen.setAttribute("data-progress", String(percents));
+        loadingBar.style.width = percents + "%";
+      };
+      let atlases = [
+        ["./img/a0.{webp,png}.519fbd7144.json"]
+      ][0];
+      let bitmapFonts = [
+        []
+      ][0];
+      const tiledImages = [
+        {}
+      ][0];
+      if (settings.isDebug) {
+        atlases = atlases.map((atlas) => atlas + "?q=" + Date.now());
+        bitmapFonts = bitmapFonts.map((font) => font + "?q=" + Date.now());
+        for (const name in tiledImages) {
+          tiledImages[name].source += "?q=" + Date.now();
+        }
+        for (const sound of exportedSounds) {
+          for (const variant of sound.variants) {
+            variant.source += "?q=" + Date.now();
+          }
+        }
+      }
+      const totalAssets = atlases.length;
+      let assetsLoaded = 0;
+      const loadingPromises = [];
+      loadingPromises.push(...atlases.map((atlas) => resLib.loadAtlas(atlas).then((texturesNames) => {
+        assetsLoaded++;
+        changeProgress(assetsLoaded / totalAssets * 100);
+        return texturesNames;
+      })));
+      for (const name in tiledImages) {
+        loadingPromises.push(resLib.loadTexture(
+          tiledImages[name].source,
+          name,
+          {
+            anchor: tiledImages[name].anchor,
+            shape: tiledImages[name].shape
+          }
+        ));
+      }
+      for (const font in bitmapFonts) {
+        loadingPromises.push(resLib.loadBitmapFont(bitmapFonts[font]));
+      }
+      for (const sound of exportedSounds) {
+        for (const variant of sound.variants) {
+          loadingPromises.push(resLib.loadSound(
+            variant.source,
+            `${pixiSoundPrefix}${variant.uid}`,
+            sound.preload
+          ));
+        }
+      }
+      /*!@res@*/
+      
+      await Promise.all(loadingPromises);
+      loadingScreen.classList.add("hidden");
+    },
+    /**
+     * Gets a pixi.js texture from a ct.js' texture name,
+     * so that it can be used in pixi.js objects.
+     * @param name The name of the ct.js texture, or -1 for an empty texture
+     * @catnipAsset name:texture
+     * @param [frame] The frame to extract
+     * @returns {PIXI.Texture|PIXI.Texture[]} If `frame` was specified,
+     * returns a single PIXI.Texture. Otherwise, returns an array
+     * with all the frames of this ct.js' texture.
+     */
+    getTexture: (name, frame) => {
+      if (frame === null) {
+        frame = void 0;
+      }
+      if (name === -1) {
+        if (frame !== void 0) {
+          return PIXI.Texture.EMPTY;
+        }
+        return [PIXI.Texture.EMPTY];
+      }
+      if (!(name in resLib.textures)) {
+        throw new Error(`Attempt to get a non-existent texture ${name}`);
+      }
+      const tex = resLib.textures[name];
+      if (frame !== void 0) {
+        return tex[frame];
+      }
+      return tex;
+    },
+    /**
+     * Returns the collision shape of the given texture.
+     * @param name The name of the ct.js texture, or -1 for an empty collision shape
+     * @catnipAsset name:texture
+     */
+    getTextureShape(name) {
+      if (name === -1) {
+        return {
+          type: "point"
+        };
+      }
+      if (!(name in resLib.textures)) {
+        throw new Error(`Attempt to get a shape of a non-existent texture ${name}`);
+      }
+      return resLib.textures[name].shape;
+    },
+    /**
+     * Gets direct children of a folder
+     * @catnipIcon folder
+     */
+    getChildren(path) {
+      return getEntriesByPath(normalizeAssetPath(path || "")).filter((entry) => entry.type !== "folder");
+    },
+    /**
+     * Gets direct children of a folder, filtered by asset type
+     * @catnipIcon folder
+     */
+    getOfType(type, path) {
+      return getEntriesByPath(normalizeAssetPath(path || "")).filter((entry) => entry.type === type);
+    },
+    /**
+     * Gets all the assets inside of a folder, including in subfolders.
+     * @catnipIcon folder
+     */
+    getAll(path) {
+      const folderEntries = getEntriesByPath(normalizeAssetPath(path || "")), entries = [];
+      const walker = (currentList) => {
+        for (const entry of currentList) {
+          if (entry.type === "folder") {
+            walker(entry.entries);
+          } else {
+            entries.push(entry);
+          }
+        }
+      };
+      walker(folderEntries);
+      return entries;
+    },
+    /**
+     * Get all the assets inside of a folder, including in subfolders, filtered by type.
+     * @catnipIcon folder
+     */
+    getAllOfType(type, path) {
+      const folderEntries = getEntriesByPath(normalizeAssetPath(path || "")), entries = [];
+      const walker = (currentList) => {
+        for (const entry of currentList) {
+          if (entry.type === "folder") {
+            walker(entry.entries);
+          }
+          if (entry.type === type) {
+            entries.push(entry);
+          }
+        }
+      };
+      walker(folderEntries);
+      return entries;
+    }
+  };
+  if (document.fonts) { for (const font of document.fonts) { font.load(); }}
+  var res_default = resLib;
+
+  // src/ct.release/backgrounds.ts
+  var bgList = {};
+  var Background = class extends PIXI.TilingSprite {
+    constructor(texName, frame = 0, depth = 0, exts = {
+      movementX: 0,
+      movementY: 0,
+      parallaxX: 0,
+      parallaxY: 0,
+      repeat: "repeat",
+      scaleX: 0,
+      scaleY: 0,
+      shiftX: 0,
+      shiftY: 0
+    }) {
+      let { width, height } = camera_default;
+      const texture = texName instanceof PIXI.Texture ? texName : res_default.getTexture(texName, frame || 0);
+      if (exts.repeat === "no-repeat" || exts.repeat === "repeat-x") {
+        height = texture.height * (exts.scaleY || 1);
+      }
+      if (exts.repeat === "no-repeat" || exts.repeat === "repeat-y") {
+        width = texture.width * (exts.scaleX || 1);
+      }
+      super(texture, width, height);
+      this.parallaxX = 1;
+      this.parallaxY = 1;
+      this.shiftX = 0;
+      this.shiftY = 0;
+      this.movementX = 0;
+      this.movementY = 0;
+      if (typeof texName === "string") {
+        if (!bgList[texName]) {
+          bgList[texName] = [];
+        }
+        bgList[texName].push(this);
+      } else {
+        if (!bgList.OTHER) {
+          bgList.OTHER = [];
+        }
+        bgList.OTHER.push(this);
+      }
+      templates_default.list.BACKGROUND.push(this);
+      stack.push(this);
+      this.on("destroyed", () => {
+        templates_default.list.BACKGROUND.splice(templates_default.list.BACKGROUND.indexOf(this), 1);
+        stack.splice(stack.indexOf(this), 1);
+      });
+      this.zIndex = depth;
+      this.anchor.set(0, 0);
+      if (exts) {
+        Object.assign(this, exts);
+      }
+      if (this.scaleX) {
+        this.tileScale.x = Number(this.scaleX);
+      }
+      if (this.scaleY) {
+        this.tileScale.y = Number(this.scaleY);
+      }
+      this.reposition();
+    }
+    onStep() {
+      this.shiftX += u_default.time * this.movementX;
+      this.shiftY += u_default.time * this.movementY;
+      if (this.repeat === "repeat-x" || this.repeat === "repeat") {
+        this.shiftX %= this.texture.width * this.tileScale.x;
+      }
+      if (this.repeat === "repeat-y" || this.repeat === "repeat") {
+        this.shiftY %= this.texture.height * this.tileScale.y;
+      }
+    }
+    /**
+     * Updates the position of this background.
+     */
+    reposition() {
+      const cameraBounds = this.isUi ? {
+        x: 0,
+        y: 0,
+        width: camera_default.width,
+        height: camera_default.height
+      } : camera_default.getBoundingBox();
+      const dx = camera_default.x - camera_default.width / 2, dy = camera_default.y - camera_default.height / 2;
+      if (this.repeat !== "repeat-x" && this.repeat !== "no-repeat") {
+        this.y = cameraBounds.y;
+        this.tilePosition.y = -this.y - dy * (this.parallaxY - 1) + this.shiftY;
+        this.height = cameraBounds.height + 1;
+      } else {
+        this.y = this.shiftY + cameraBounds.y * (this.parallaxY - 1);
+      }
+      if (this.repeat !== "repeat-y" && this.repeat !== "no-repeat") {
+        this.x = cameraBounds.x;
+        this.tilePosition.x = -this.x - dx * (this.parallaxX - 1) + this.shiftX;
+        this.width = cameraBounds.width + 1;
+      } else {
+        this.x = this.shiftX + cameraBounds.x * (this.parallaxX - 1);
+      }
+    }
+    onDraw() {
+      this.reposition();
+    }
+    static onCreate() {
+    }
+    static onDestroy() {
+    }
+    get isUi() {
+      return this.parent ? Boolean(this.parent.isUi) : false;
+    }
+  };
+  var backgroundsLib = {
+    /**
+     * An object that contains all the backgrounds of the current room.
+     * @type {Record<string, Background[]>}
+     * @catnipList texture
+     */
+    list: bgList,
+    /**
+     * @param texName - Name of a texture to use as a background
+     * @catnipAsset texName:texture
+     * @param [frame] - The index of a frame to use. Defaults to 0
+     * @param [depth] - The depth to place the background at. Defaults to 0
+     * @param [container] - Where to put the background. Defaults to current room,
+     * can be a room or other pixi container.
+     * @returns {Background} The created background
+     * @catnipSaveReturn
+     */
+    add(texName, frame = 0, depth = 0, container) {
+      if (!rooms_default.current) {
+        throw new Error("[backgrounds.add] Cannot add a background before the main room is created");
+      }
+      if (!container) {
+        container = rooms_default.current;
+      }
+      if (!texName) {
+        throw new Error("[backgrounds] The texName argument is required.");
+      }
+      const bg = new Background(texName, frame, depth);
+      if (container instanceof Room) {
+        container.backgrounds.push(bg);
+      }
+      container.addChild(bg);
+      return bg;
+    }
+  };
+  var backgrounds_default = backgroundsLib;
 
   // src/ct.release/rooms.ts
   var Room = class _Room extends PIXI.Container {
@@ -3741,7 +3792,7 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
         }
         if (isRoot) {
           roomsLib.current = this;
-          pixiApp.renderer.background.color = u_default.hexToPixi(this.template.backgroundColor);
+          pixiApp.renderer.background.color = this.template.backgroundColor;
         }
         if (this === rooms.current) {
     place.tileGrid = {};
@@ -3782,7 +3833,8 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
               customWordWrap: copy.customWordWrap,
               customText: copy.customText,
               customAnchor: copy.customAnchor,
-              align: copy.align
+              align: copy.align,
+              placedInRoom: true
             }
           );
           if (copy.align) {
@@ -3948,273 +4000,274 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
     }
   };
   Room.roomId = 0;
-  var nextRoom;
-  var roomsLib = {
-    /**
-     * All the existing room templates that can be used in the game.
-     * It is usually prefilled by ct.IDE.
-     * @catnipIgnore
-     */
-    templates: {},
-    /**
-     * @catnipIgnore
-     */
-    Room,
-    /** The current top-level room in the game. */
-    current: null,
-    /**
-     * An object that contains arrays of currently present rooms.
-     * These include the current room (`rooms.current`), as well as any rooms
-     * appended or prepended through `rooms.append` and `rooms.prepend`.
-     * @catnipList room
-     */
-    list: {},
-    /**
-     * Creates and adds a background to the current room, at the given depth.
-     * @param {string} texture The name of the texture to use
-     * @catnipAsset texture:texture
-     * @param {number} depth The depth of the new background
-     * @returns {Background} The created background
-     * @catnipSaveReturn
-     */
-    addBg(texture, depth) {
-      if (!roomsLib.current) {
-        throw new Error("[rooms.addBg] You cannot add a background before a room is created");
-      }
-      const bg = new Background(texture, 0, depth);
-      roomsLib.current.addChild(bg);
-      return bg;
-    },
-    /**
-     * Clears the current stage, removing all rooms with copies, tile layers, backgrounds,
-     * and other potential entities.
-     * @returns {void}
-     */
-    clear() {
-      pixiApp.stage.children.length = 0;
-      stack.length = 0;
-      for (const i in templates_default.list) {
-        templates_default.list[i] = [];
-      }
-      for (const i in backgrounds_default.list) {
-        backgrounds_default.list[i] = [];
-      }
-      roomsLib.list = {};
-      for (const name in roomsLib.templates) {
-        roomsLib.list[name] = [];
-      }
-    },
-    /**
-     * This method safely removes a previously appended/prepended room from the stage.
-     * It will trigger "On Leave" for a room and "On Destroy" event
-     * for all the copies of the removed room.
-     * The room will also have `this.kill` set to `true` in its event, if it comes in handy.
-     * This method cannot remove `rooms.current`, the main room.
-     * @param {Room} room The `room` argument must be a reference
-     * to the previously created room.
-     * @returns {void}
-     */
-    remove(room) {
-      if (!(room instanceof Room)) {
-        if (typeof room === "string") {
-          console.error("[rooms.remove] To remove a room, you should provide a reference to it (to an object), not its name. Provided value:", room);
-          throw new Error("[rooms.remove] Invalid argument type");
+  var roomsLib = /* @__PURE__ */ (() => {
+    let nextRoom;
+    const roomsLib2 = {
+      /**
+       * All the existing room templates that can be used in the game.
+       * It is usually prefilled by ct.IDE.
+       * @catnipIgnore
+       */
+      templates: {},
+      /**
+       * @catnipIgnore
+       */
+      Room,
+      /** The current top-level room in the game. */
+      current: null,
+      /**
+       * An object that contains arrays of currently present rooms.
+       * These include the current room (`rooms.current`), as well as any rooms
+       * appended or prepended through `rooms.append` and `rooms.prepend`.
+       * @catnipList room
+       */
+      list: {},
+      /**
+       * Creates and adds a background to the current room, at the given depth.
+       * @param {string} texture The name of the texture to use
+       * @catnipAsset texture:texture
+       * @param {number} depth The depth of the new background
+       * @returns {Background} The created background
+       * @catnipSaveReturn
+       */
+      addBg(texture, depth) {
+        if (!roomsLib2.current) {
+          throw new Error("[rooms.addBg] You cannot add a background before a room is created");
         }
-        throw new Error("[rooms] An attempt to remove a room that is not actually a room! Provided value:" + room);
-      }
-      const ind = roomsLib.list[room.name].indexOf(room);
-      if (ind !== -1) {
-        roomsLib.list[room.name].splice(ind, 1);
-      } else {
-        console.warn("[rooms] Removing a room that was not found in rooms.list. This is strange\u2026");
-      }
-      room.kill = true;
-      pixiApp.stage.removeChild(room);
-      for (const copy of room.children) {
-        if (copyTypeSymbol in copy) {
-          killRecursive(copy);
+        const bg = new Background(texture, 0, depth);
+        roomsLib2.current.addChild(bg);
+        return bg;
+      },
+      /**
+       * Clears the current stage, removing all rooms with copies, tile layers, backgrounds,
+       * and other potential entities.
+       * @returns {void}
+       */
+      clear() {
+        pixiApp.stage.children.length = 0;
+        stack.length = 0;
+        for (const i in templates_default.list) {
+          templates_default.list[i] = [];
         }
-      }
-      room.onLeave();
-      roomsLib.onLeave.apply(room);
-    },
-    /**
-     * Switches to the given room. Note that this transition happens at the end
-     * of the frame, so the name of a new room may be overridden.
-     * @catnipAsset roomName:room
-     */
-    "switch"(roomName) {
-      if (roomsLib.templates[roomName]) {
-        nextRoom = roomName;
-        roomsLib.switching = true;
-      } else {
-        console.error('[rooms] The room "' + roomName + '" does not exist!');
-      }
-    },
-    /**
-     * Whether a room switch is scheduled.
-     * @catnipIgnore
-     */
-    switching: false,
-    /**
-     * Restarts the current room.
-     * @returns {void}
-     */
-    restart() {
-      if (!roomsLib.current) {
-        throw new Error("[rooms.restart] Cannot restart a room before it is created");
-      }
-      roomsLib.switch(roomsLib.current.name);
-    },
-    /**
-     * Creates a new room and adds it to the stage, separating its draw stack
-     * from existing ones.
-     * This room is added to `ct.stage` after all the other rooms.
-     * @param {string} roomName The name of the room to be appended
-     * @param {object} [params] Any additional parameters applied to the new room.
-     * Useful for passing settings and data to new widgets and prefabs.
-     * @returns {Room} A newly created room
-     * @catnipIgnore Defined in catnip/stdLib/rooms.ts
-     */
-    append(roomName, params) {
-      if (!(roomName in roomsLib.templates)) {
-        throw new Error(`[rooms.append] append failed: the room ${roomName} does not exist!`);
-      }
-      const room = new Room(roomsLib.templates[roomName], false);
-      if (params) {
-        Object.assign(room, params);
-      }
-      pixiApp.stage.addChild(room);
-      room.onCreate.apply(room);
-      roomsLib.onCreate.apply(room);
-      roomsLib.list[roomName].push(room);
-      return room;
-    },
-    /**
-     * Creates a new room and adds it to the stage, separating its draw stack
-     * from existing ones.
-     * This room is added to `ct.stage` before all the other rooms.
-     * @param {string} roomName The name of the room to be prepended
-     * @param {object} [params] Any additional parameters applied to the new room.
-     * Useful for passing settings and data to new widgets and prefabs.
-     * @returns {Room} A newly created room
-     * @catnipIgnore Defined in catnip/stdLib/rooms.ts
-     */
-    prepend(roomName, params) {
-      if (!(roomName in roomsLib.templates)) {
-        throw new Error(`[rooms] prepend failed: the room ${roomName} does not exist!`);
-      }
-      const room = new Room(roomsLib.templates[roomName], false);
-      if (params) {
-        Object.assign(room, params);
-      }
-      pixiApp.stage.addChildAt(room, 0);
-      room.onCreate.apply(room);
-      roomsLib.onCreate.apply(room);
-      roomsLib.list[roomName].push(room);
-      return room;
-    },
-    /**
-     * Merges a given room into the current one. Skips room's OnCreate event.
-     *
-     * @param roomName The name of the room that needs to be merged
-     * @catnipAsset roomName:room
-     * @returns Arrays of created copies, backgrounds, tile layers,
-     * added to the current room (`rooms.current`). Note: it does not get updated,
-     * so beware of memory leaks if you keep a reference to this array for a long time!
-     * @catnipSaveReturn
-     */
-    merge(roomName) {
-      if (!roomsLib.current) {
-        throw new Error("[rooms.merge] Cannot merge in a room before the main one is created");
-      }
-      if (!(roomName in roomsLib.templates)) {
-        console.error(`[rooms] merge failed: the room ${roomName} does not exist!`);
-        return false;
-      }
-      const generated = {
-        copies: [],
-        tileLayers: [],
-        backgrounds: []
-      };
-      const template = roomsLib.templates[roomName];
-      const target = roomsLib.current;
-      for (const t of template.bgs) {
-        const bg = new Background(t.texture, 0, t.depth, t.exts);
-        target.backgrounds.push(bg);
-        target.addChild(bg);
-        generated.backgrounds.push(bg);
-      }
-      for (const t of template.tiles) {
-        const tl = new Tilemap(t);
-        target.tileLayers.push(tl);
-        target.addChild(tl);
-        generated.tileLayers.push(tl);
-      }
-      for (const t of template.objects) {
-        const c = templates_default.copyIntoRoom(t.template, t.x, t.y, target, {
-          tx: t.scale.x || 1,
-          ty: t.scale.y || 1,
-          tr: t.rotation || 0,
-          scaleX: t.scale?.x,
-          scaleY: t.scale?.y,
-          rotation: t.rotation,
-          alpha: t.opacity,
-          ...t.customProperties
-        });
-        generated.copies.push(c);
-      }
-      return generated;
-    },
-    /**
-     * @catnipIgnore
-     */
-    forceSwitch(roomName) {
-      if (nextRoom) {
-        roomName = nextRoom;
-      }
-      if (roomsLib.current) {
-        roomsLib.rootRoomOnLeave.apply(roomsLib.current);
-        roomsLib.current.onLeave();
-        roomsLib.onLeave.apply(roomsLib.current);
-        roomsLib.current = null;
-      }
-      roomsLib.clear();
-      for (const copy of forceDestroy) {
-        copy.destroy();
-      }
-      forceDestroy.clear();
-      deadPool.length = 0;
-      var template = roomsLib.templates[roomName];
-      camera_default.reset(
-        template.width / 2,
-        template.height / 2,
-        template.width,
-        template.height
-      );
-      if (template.cameraConstraints) {
-        camera_default.minX = template.cameraConstraints.x1;
-        camera_default.maxX = template.cameraConstraints.x2;
-        camera_default.minY = template.cameraConstraints.y1;
-        camera_default.maxY = template.cameraConstraints.y2;
-      }
-      roomsLib.current = new Room(template, true);
-      pixiApp.stage.addChild(roomsLib.current);
-      updateViewport();
-      roomsLib.rootRoomOnCreate.apply(roomsLib.current);
-      roomsLib.current.onCreate();
-      roomsLib.onCreate.apply(roomsLib.current);
-      roomsLib.list[roomName].push(roomsLib.current);
-      
-      camera_default.manageStage();
-      roomsLib.switching = false;
-      nextRoom = void 0;
-    },
-    /**
-     * @catnipIgnore
-     */
-    onCreate() {
-      if (this === rooms.current) {
+        for (const i in backgrounds_default.list) {
+          backgrounds_default.list[i] = [];
+        }
+        roomsLib2.list = {};
+        for (const name in roomsLib2.templates) {
+          roomsLib2.list[name] = [];
+        }
+      },
+      /**
+       * This method safely removes a previously appended/prepended room from the stage.
+       * It will trigger "On Leave" for a room and "On Destroy" event
+       * for all the copies of the removed room.
+       * The room will also have `this.kill` set to `true` in its event, if it comes in handy.
+       * This method cannot remove `rooms.current`, the main room.
+       * @param {Room} room The `room` argument must be a reference
+       * to the previously created room.
+       * @returns {void}
+       */
+      remove(room) {
+        if (!(room instanceof Room)) {
+          if (typeof room === "string") {
+            console.error("[rooms.remove] To remove a room, you should provide a reference to it (to an object), not its name. Provided value:", room);
+            throw new Error("[rooms.remove] Invalid argument type");
+          }
+          throw new Error("[rooms] An attempt to remove a room that is not actually a room! Provided value:" + room);
+        }
+        const ind = roomsLib2.list[room.name].indexOf(room);
+        if (ind !== -1) {
+          roomsLib2.list[room.name].splice(ind, 1);
+        } else {
+          console.warn("[rooms] Removing a room that was not found in rooms.list. This is strange\u2026");
+        }
+        room.kill = true;
+        pixiApp.stage.removeChild(room);
+        for (const copy of room.children) {
+          if (copyTypeSymbol in copy) {
+            killRecursive(copy);
+          }
+        }
+        room.onLeave();
+        roomsLib2.onLeave.apply(room);
+      },
+      /**
+       * Switches to the given room. Note that this transition happens at the end
+       * of the frame, so the name of a new room may be overridden.
+       * @catnipAsset roomName:room
+       */
+      "switch"(roomName) {
+        if (roomsLib2.templates[roomName]) {
+          nextRoom = roomName;
+          roomsLib2.switching = true;
+        } else {
+          console.error('[rooms] The room "' + roomName + '" does not exist!');
+        }
+      },
+      /**
+       * Whether a room switch is scheduled.
+       * @catnipIgnore
+       */
+      switching: false,
+      /**
+       * Restarts the current room.
+       * @returns {void}
+       */
+      restart() {
+        if (!roomsLib2.current) {
+          throw new Error("[rooms.restart] Cannot restart a room before it is created");
+        }
+        roomsLib2.switch(roomsLib2.current.name);
+      },
+      /**
+       * Creates a new room and adds it to the stage, separating its draw stack
+       * from existing ones.
+       * This room is added to `ct.stage` after all the other rooms.
+       * @param {string} roomName The name of the room to be appended
+       * @param {object} [params] Any additional parameters applied to the new room.
+       * Useful for passing settings and data to new widgets and prefabs.
+       * @returns {Room} A newly created room
+       * @catnipIgnore Defined in catnip/stdLib/rooms.ts
+       */
+      append(roomName, params) {
+        if (!(roomName in roomsLib2.templates)) {
+          throw new Error(`[rooms.append] append failed: the room ${roomName} does not exist!`);
+        }
+        const room = new Room(roomsLib2.templates[roomName], false);
+        if (params) {
+          Object.assign(room, params);
+        }
+        pixiApp.stage.addChild(room);
+        room.onCreate.apply(room);
+        roomsLib2.onCreate.apply(room);
+        roomsLib2.list[roomName].push(room);
+        return room;
+      },
+      /**
+       * Creates a new room and adds it to the stage, separating its draw stack
+       * from existing ones.
+       * This room is added to `ct.stage` before all the other rooms.
+       * @param {string} roomName The name of the room to be prepended
+       * @param {object} [params] Any additional parameters applied to the new room.
+       * Useful for passing settings and data to new widgets and prefabs.
+       * @returns {Room} A newly created room
+       * @catnipIgnore Defined in catnip/stdLib/rooms.ts
+       */
+      prepend(roomName, params) {
+        if (!(roomName in roomsLib2.templates)) {
+          throw new Error(`[rooms] prepend failed: the room ${roomName} does not exist!`);
+        }
+        const room = new Room(roomsLib2.templates[roomName], false);
+        if (params) {
+          Object.assign(room, params);
+        }
+        pixiApp.stage.addChildAt(room, 0);
+        room.onCreate.apply(room);
+        roomsLib2.onCreate.apply(room);
+        roomsLib2.list[roomName].push(room);
+        return room;
+      },
+      /**
+       * Merges a given room into the current one. Skips room's OnCreate event.
+       *
+       * @param roomName The name of the room that needs to be merged
+       * @catnipAsset roomName:room
+       * @returns Arrays of created copies, backgrounds, tile layers,
+       * added to the current room (`rooms.current`). Note: it does not get updated,
+       * so beware of memory leaks if you keep a reference to this array for a long time!
+       * @catnipSaveReturn
+       */
+      merge(roomName) {
+        if (!roomsLib2.current) {
+          throw new Error("[rooms.merge] Cannot merge in a room before the main one is created");
+        }
+        if (!(roomName in roomsLib2.templates)) {
+          console.error(`[rooms] merge failed: the room ${roomName} does not exist!`);
+          return false;
+        }
+        const generated = {
+          copies: [],
+          tileLayers: [],
+          backgrounds: []
+        };
+        const template = roomsLib2.templates[roomName];
+        const target = roomsLib2.current;
+        for (const t of template.bgs) {
+          const bg = new Background(t.texture, 0, t.depth, t.exts);
+          target.backgrounds.push(bg);
+          target.addChild(bg);
+          generated.backgrounds.push(bg);
+        }
+        for (const t of template.tiles) {
+          const tl = new Tilemap(t);
+          target.tileLayers.push(tl);
+          target.addChild(tl);
+          generated.tileLayers.push(tl);
+        }
+        for (const t of template.objects) {
+          const c = templates_default.copyIntoRoom(t.template, t.x, t.y, target, {
+            tx: t.scale.x || 1,
+            ty: t.scale.y || 1,
+            tr: t.rotation || 0,
+            scaleX: t.scale?.x,
+            scaleY: t.scale?.y,
+            rotation: t.rotation,
+            alpha: t.opacity,
+            ...t.customProperties
+          });
+          generated.copies.push(c);
+        }
+        return generated;
+      },
+      /**
+       * @catnipIgnore
+       */
+      forceSwitch(roomName) {
+        if (nextRoom) {
+          roomName = nextRoom;
+        }
+        if (roomsLib2.current) {
+          roomsLib2.rootRoomOnLeave.apply(roomsLib2.current);
+          roomsLib2.current.onLeave();
+          roomsLib2.onLeave.apply(roomsLib2.current);
+          roomsLib2.current = null;
+        }
+        roomsLib2.clear();
+        for (const copy of forceDestroy) {
+          copy.destroy();
+        }
+        forceDestroy.clear();
+        deadPool.length = 0;
+        var template = roomsLib2.templates[roomName];
+        camera_default.reset(
+          template.width / 2,
+          template.height / 2,
+          template.width,
+          template.height
+        );
+        if (template.cameraConstraints) {
+          camera_default.minX = template.cameraConstraints.x1;
+          camera_default.maxX = template.cameraConstraints.x2;
+          camera_default.minY = template.cameraConstraints.y1;
+          camera_default.maxY = template.cameraConstraints.y2;
+        }
+        roomsLib2.current = new Room(template, true);
+        pixiApp.stage.addChild(roomsLib2.current);
+        updateViewport();
+        roomsLib2.rootRoomOnCreate.apply(roomsLib2.current);
+        roomsLib2.current.onCreate();
+        roomsLib2.onCreate.apply(roomsLib2.current);
+        roomsLib2.list[roomName].push(roomsLib2.current);
+        
+        camera_default.manageStage();
+        roomsLib2.switching = false;
+        nextRoom = void 0;
+      },
+      /**
+       * @catnipIgnore
+       */
+      onCreate() {
+        if (this === rooms.current) {
     const debugTraceGraphics = new PIXI.Graphics();
     debugTraceGraphics.depth = 10000000; // Why not. Overlap everything.
     rooms.current.addChild(debugTraceGraphics);
@@ -4227,30 +4280,30 @@ for (const layer of this.tileLayers) {
     place.enableTilemapCollisions(layer);
 }
 
-      if (this.behaviors.length) {
-        runBehaviors(this, "rooms", "thisOnCreate");
-      }
-    },
-    /**
-     * @catnipIgnore
-     */
-    onLeave() {
-      if (this === rooms.current) {
+        if (this.behaviors.length) {
+          runBehaviors(this, "rooms", "thisOnCreate");
+        }
+      },
+      /**
+       * @catnipIgnore
+       */
+      onLeave() {
+        if (this === rooms.current) {
     place.grid = {};
 }
 if (!this.kill) {
     tween.tweens = [];
 }
 
-      if (this.behaviors.length) {
-        runBehaviors(this, "rooms", "thisOnDestroy");
-      }
-    },
-    /**
-     * @catnipIgnore
-     */
-    beforeStep() {
-      pointer.updateGestures();
+        if (this.behaviors.length) {
+          runBehaviors(this, "rooms", "thisOnDestroy");
+        }
+      },
+      /**
+       * @catnipIgnore
+       */
+      beforeStep() {
+        pointer.updateGestures();
 {
     const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
     pointer.x = positionGame.x;
@@ -4265,6 +4318,9 @@ if (!this.kill) {
                 code: 2,
                 info: 'Copy is killed'
             });
+            tween.tweens.splice(i, 1);
+            continue;
+        } else if (twoon.timer.rejected) {
             tween.tweens.splice(i, 1);
             continue;
         }
@@ -4290,31 +4346,30 @@ if (!this.kill) {
     }
 }
 
-    },
-    /**
-     * @catnipIgnore
-     */
-    afterStep() {
-      
-      if (this.behaviors.length) {
-        runBehaviors(this, "rooms", "thisOnStep");
-      }
-      for (const c of this.tickerSet) {
-        c.tick();
-      }
-    },
-    /**
-     * @catnipIgnore
-     */
-    beforeDraw() {
-      
-    },
-    /**
-     * @catnipIgnore
-     */
-    afterDraw() {
-      keyboard.clear();
-for (const p of pointer.down) {
+      },
+      /**
+       * @catnipIgnore
+       */
+      afterStep() {
+        
+        if (this.behaviors.length) {
+          runBehaviors(this, "rooms", "thisOnStep");
+        }
+        for (const c of this.tickerSet) {
+          c.tick();
+        }
+      },
+      /**
+       * @catnipIgnore
+       */
+      beforeDraw() {
+        
+      },
+      /**
+       * @catnipIgnore
+       */
+      afterDraw() {
+        for (const p of pointer.down) {
     p.xprev = p.x;
     p.yprev = p.y;
     p.xuiprev = p.x;
@@ -4329,48 +4384,51 @@ for (const p of pointer.hover) {
 inputs.registry['pointer.Wheel'] = 0;
 pointer.clearReleased();
 pointer.xmovement = pointer.ymovement = 0;
+keyboard.clear();
 
-      if (this.behaviors.length) {
-        runBehaviors(this, "rooms", "thisOnDraw");
-      }
-      for (const fn of this.bindings) {
-        fn();
-      }
-    },
-    /**
-     * @catnipIgnore
-     */
-    rootRoomOnCreate() {
-      
+        if (this.behaviors.length) {
+          runBehaviors(this, "rooms", "thisOnDraw");
+        }
+        for (const fn of this.bindings) {
+          fn();
+        }
+      },
+      /**
+       * @catnipIgnore
+       */
+      rootRoomOnCreate() {
+        
 
-    },
-    /**
-     * @catnipIgnore
-     */
-    rootRoomOnStep() {
-      
+      },
+      /**
+       * @catnipIgnore
+       */
+      rootRoomOnStep() {
+        
 
-    },
-    /**
-     * @catnipIgnore
-     */
-    rootRoomOnDraw() {
-      
+      },
+      /**
+       * @catnipIgnore
+       */
+      rootRoomOnDraw() {
+        
 
-    },
-    /**
-     * @catnipIgnore
-     */
-    rootRoomOnLeave() {
-      
+      },
+      /**
+       * @catnipIgnore
+       */
+      rootRoomOnLeave() {
+        
 
-    },
-    /**
-     * The name of the starting room, as it was set in ct.IDE.
-     * @type {string}
-     */
-    starting: "Game"
-  };
+      },
+      /**
+       * The name of the starting room, as it was set in ct.IDE.
+       * @type {string}
+       */
+      starting: "Game"
+    };
+    return roomsLib2;
+  })();
   var rooms_default = roomsLib;
 
   // src/ct.release/fittoscreen.ts
@@ -4479,6 +4537,7 @@ pointer.xmovement = pointer.ymovement = 0;
       win.setFullScreen(!win.isFullScreen());
       return;
     } catch (e) {
+      void e;
     }
     const canvas = document.fullscreenElement;
     const requester = document.getElementById("ct");
@@ -4498,6 +4557,7 @@ pointer.xmovement = pointer.ymovement = 0;
       const win = __require("electron").remote.BrowserWindow.getFocusedWindow;
       return win.isFullScreen;
     } catch (e) {
+      void e;
     }
     return Boolean(document.fullscreenElement);
   };
@@ -5105,6 +5165,9 @@ pointer.xmovement = pointer.ymovement = 0;
   // src/ct.release/scripts.ts
   var scriptsLib = {
     'Event.sys': function (options) {
+/* 🐱👉 Script asset Event.sys */
+
+
   return createSystem({
     PRIORITY: Priority.LAST,
 
@@ -5112,6 +5175,9 @@ pointer.xmovement = pointer.ymovement = 0;
       G.events.w.clear()
     }
   })},'BoardGeneration.sys': function (options) {
+/* 🐱👉 Script asset BoardGeneration.sys */
+
+
 
   function emitEvents(board) {
     const { add } = G.events.w
@@ -5196,7 +5262,11 @@ pointer.xmovement = pointer.ymovement = 0;
 
       emitEvents(board)
     },
-  })},'FlaskSelection.sys': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }  function getSelected() { return G.model.w.queries.selectedFlask.first }
+  })},'FlaskSelection.sys': function (options) {
+/* 🐱👉 Script asset FlaskSelection.sys */
+
+ function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+  function getSelected() { return G.model.w.queries.selectedFlask.first }
 
   function select(id, selected) {
     const flaskEntity = G.model.w.queries.flask.entity(id)
@@ -5206,7 +5276,7 @@ pointer.xmovement = pointer.ymovement = 0;
     const isSelectable = Flask.isSelectable(flaskEntity[MC.Flask])
 
     if (!selected && isSelectable) selectFlask(flaskEntity)
-    else if (!selected && !isSelectable) selectionFailed(flaskEntity)
+    else if (!selected && !isSelectable) failSelection(flaskEntity)
     else if (selected === flaskEntity) deselectCurrentFlask()
     else if (flask.stack.length === flask.volume && isSelectable) {
       deselectCurrentFlask()
@@ -5236,7 +5306,7 @@ pointer.xmovement = pointer.ymovement = 0;
     G.events.w.add({ [EC.FlaskDeselected]: id, [EC.FlaskUpdated]: id })
   }
 
-  function selectionFailed(entity) {
+  function failSelection(entity) {
     const { id } = entity
     G.events.w.add({ [EC.FlaskSelectionFailed]: id, [EC.FlaskUpdated]: id })
   }
@@ -5257,7 +5327,7 @@ pointer.xmovement = pointer.ymovement = 0;
           return deselectCurrentFlask()
 
         const flaskEntity = w.queries.flask.entity(id)
-        if (!Flask.isSelectable(flaskEntity[MC.Flask])) return selectionFailed(flaskEntity)
+        if (!Flask.isSelectable(flaskEntity[MC.Flask])) return failSelection(flaskEntity)
         deselectCurrentFlask()
         selectFlask(flaskEntity)
       }
@@ -5270,6 +5340,9 @@ pointer.xmovement = pointer.ymovement = 0;
       }
     }
   })},'Pouring.sys': function (options) {
+/* 🐱👉 Script asset Pouring.sys */
+
+
   function canPour(from, to) {
     const { [MC.Flask]: fromFlask } = from
     const { [MC.Flask]: toFlask } = to
@@ -5304,7 +5377,10 @@ pointer.xmovement = pointer.ymovement = 0;
         pour(from, to)
       }
     }
-  })},'FlaskState.sys': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+  })},'FlaskState.sys': function (options) {
+/* 🐱👉 Script asset FlaskState.sys */
+
+ function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
   return createSystem({
     onPreRender() {
       const { board } = G.model
@@ -5317,7 +5393,10 @@ pointer.xmovement = pointer.ymovement = 0;
 
         if (isChanged) {
           const event = { [EC.FlaskStateChanged]: flask.orderPosition, [EC.FlaskUpdated]: flask.orderPosition }
-          if (flask.state === FlaskState.Solved) event[EC.FlaskSolved] = flask.orderPosition
+          if (flask.state === FlaskState.Solved) {
+            event[EC.FlaskSolved] = flask.orderPosition
+          }
+
           add(event)
         }
       }
@@ -5329,6 +5408,9 @@ pointer.xmovement = pointer.ymovement = 0;
       }
     }
   })},'Game.sys': function (options) {
+/* 🐱👉 Script asset Game.sys */
+
+
     var E; (function (E) { const UPDATE = 0; E[E["UPDATE"] = UPDATE] = "UPDATE"; })(E || (E = {}));
 
     const { Launching, MainMenu, Gameplay, Paused } = GameState
@@ -5355,11 +5437,17 @@ pointer.xmovement = pointer.ymovement = 0;
             gameFSM.dispatch(UPDATE)
         }
     })},'CleanUpModel.sys': function (options) {
+/* 🐱👉 Script asset CleanUpModel.sys */
+
+
     return createSystem({
         onEnd() {
             G.model.w.clear()
         }
     })},'flask.yTween': function (options) {
+/* 🐱👉 Script asset flask.yTween */
+
+
     const [flaskContainer] = arguments
     const offset = flaskContainer.height / 2
     return function yTween(y, options = {}) {
@@ -5371,6 +5459,9 @@ pointer.xmovement = pointer.ymovement = 0;
             ...options
         })
     }},'flask.scaleTween': function (options) {
+/* 🐱👉 Script asset flask.scaleTween */
+
+
 
     const [flaskContainer] = arguments
     return function yTween(scale, options = {}) {
@@ -5381,7 +5472,10 @@ pointer.xmovement = pointer.ymovement = 0;
             silent: true,
             ...options
         })
-    }},'LiquidLayerRender.sys': function (options) {    const FLASK_SCALE = 1, MAX_FLASK_WIDTH = 128, MAX_FLASK_HEIGHT = 400
+    }},'LiquidLayerRender.sys': function (options) {
+/* 🐱👉 Script asset LiquidLayerRender.sys */
+
+    const FLASK_SCALE = 1, MAX_FLASK_WIDTH = 128, MAX_FLASK_HEIGHT = 400
     const flaskWidth = MAX_FLASK_WIDTH * FLASK_SCALE, flaskHeight = MAX_FLASK_HEIGHT * FLASK_SCALE
     const PADDING = 20
 
@@ -5497,6 +5591,9 @@ pointer.xmovement = pointer.ymovement = 0;
             }
         }
     })},'SpriteRemoving.sys': function (options) {
+/* 🐱👉 Script asset SpriteRemoving.sys */
+
+
     return createSystem({
         PRIORITY: Priority.Lowest,
 
@@ -5512,6 +5609,9 @@ pointer.xmovement = pointer.ymovement = 0;
             }
         }
     })},'ViewEntityRemoving.sys': function (options) {
+/* 🐱👉 Script asset ViewEntityRemoving.sys */
+
+
     return createSystem({
         PRIORITY: Priority.LAST,
 
@@ -5527,7 +5627,10 @@ pointer.xmovement = pointer.ymovement = 0;
             G.view.w.clear()
         }
     })
-},'PauseMenu.sys': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }
+},'PauseMenu.sys': function (options) {
+/* 🐱👉 Script asset PauseMenu.sys */
+
+ function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }
     var E; (function (E) { const U = 0; E[E["U"] = U] = "U"; })(E || (E = {}));
     var S; (function (S) { const Start = 0; S[S["Start"] = Start] = "Start"; const Hiden = Start + 1; S[S["Hiden"] = Hiden] = "Hiden"; const Shown = Hiden + 1; S[S["Shown"] = Shown] = "Shown"; })(S || (S = {}));
     
@@ -5578,7 +5681,10 @@ pointer.xmovement = pointer.ymovement = 0;
         }
     })
 
-    return sys},'MainMenu.sys': function (options) { function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }
+    return sys},'MainMenu.sys': function (options) {
+/* 🐱👉 Script asset MainMenu.sys */
+
+ function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } }
     var E; (function (E) { const U = 0; E[E["U"] = U] = "U"; })(E || (E = {}));
     var S; (function (S) { const Start = 0; S[S["Start"] = Start] = "Start"; const Hiden = Start + 1; S[S["Hiden"] = Hiden] = "Hiden"; const Shown = Hiden + 1; S[S["Shown"] = Shown] = "Shown"; })(S || (S = {}));
     
@@ -5631,6 +5737,9 @@ pointer.xmovement = pointer.ymovement = 0;
 
     return sys
 },'BoardView.sys': function (options) {
+/* 🐱👉 Script asset BoardView.sys */
+
+
     const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 128, MAX_FLASK_HEIGHT = 400
     const
         flaskWidth = MAX_FLASK_WIDTH,
@@ -5791,7 +5900,10 @@ pointer.xmovement = pointer.ymovement = 0;
         }
     })
 
-},'Animation.sys': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+},'Animation.sys': function (options) {
+/* 🐱👉 Script asset Animation.sys */
+
+ function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
     var AnimationEvent; (function (AnimationEvent) { const UPDATE = 'UPDATE'; AnimationEvent["UPDATE"] = UPDATE; })(AnimationEvent || (AnimationEvent = {}));
     const { Starting, Playing, Ended } = AnimationState
     const { UPDATE } = AnimationEvent
@@ -5826,12 +5938,6 @@ pointer.xmovement = pointer.ymovement = 0;
         }
         const { start, duration } = timer[MC.Timer]
         context.t = u.clamp(0, u.map(G.time.total, start, start + duration, 0, 1), 1)
-    }
-
-    function renderAnimation(context) {
-        // const COUNT = 1
-        // const OFFSET = Math.PI / 2
-        // context.target[VC.Copy].alpha = u.map(Math.sin(context.t * 2 * COUNT * Math.PI + OFFSET), -1, 1, 0, 1)
     }
 
     function start(context) { _optionalChain([ANIMATIONS, 'access', _2 => _2[context.name], 'optionalAccess', _3 => _3.start, 'call', _4 => _4(context)]) }
@@ -5894,6 +6000,9 @@ pointer.xmovement = pointer.ymovement = 0;
             }
         }
     })},'Shake.subsys': function (options) {
+/* 🐱👉 Script asset Shake.subsys */
+
+
     const AMPLITUDE = 5
     const FREQUIENCY = 2
 
@@ -5915,9 +6024,47 @@ pointer.xmovement = pointer.ymovement = 0;
     }
 
     return shake},'Animations.subsys': function (options) {
+/* 🐱👉 Script asset Animations.subsys */
+
+
     return {
-        [AnimationName.Shake]: scripts['Shake.subsys']()
-    }},'Level.sys': function (options) { function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
+        [AnimationName.Shake]: scripts['Shake.subsys'](),
+        [AnimationName.Bounce]: scripts['Bounce.subsys'](),
+    }},'Bounce.subsys': function (options) {
+/* 🐱👉 Script asset Bounce.subsys */
+
+
+    const MAX_AMPLITUDE = 64
+    const BOUNCES = 5
+
+    const shake = {
+        start(data) {
+            const { fields } = data
+            fields.position = new PIXI.Point()
+        },
+        update({ t, fields }) {
+            const tt = t ** 2
+            const amplitude = tt * BOUNCES * Math.PI
+            const currentBounce = Math.ceil(tt * BOUNCES)
+            const sin = Math.sin(amplitude)
+            let force
+            if (currentBounce === 1) {
+                force = 1
+            } else {
+                force = 1 - (currentBounce / BOUNCES) ** 0.5
+            }
+            fields.position.y = -Math.abs(sin) * MAX_AMPLITUDE * force
+        },
+        end({ fields }) {
+            fields.position.y = 0
+        }
+    }
+
+    return shake
+},'Level.sys': function (options) {
+/* 🐱👉 Script asset Level.sys */
+
+ function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
   function isViewFaded() {
     return _optionalChain([G, 'access', _ => _.view, 'access', _2 => _2.board, 'optionalAccess', _3 => _3.state]) === BoardViewState.End
   }
@@ -5935,6 +6082,9 @@ pointer.xmovement = pointer.ymovement = 0;
       }
     }
   })},'LEVEL_CONFIGS': function (options) {
+/* 🐱👉 Script asset LEVEL_CONFIGS */
+
+
     return {
         [LevelMode.CLASSIC_RANDOM]: {
             volume: Math.round(random.range(2, 12)),
@@ -5946,6 +6096,9 @@ pointer.xmovement = pointer.ymovement = 0;
         },
     } 
 },'Time.sys': function (options) {
+/* 🐱👉 Script asset Time.sys */
+
+
     function addTime() {
         G.time.total += u.time
     }
@@ -5991,7 +6144,69 @@ ${errorBody.innerText}`);
     parent.style.display = "none";
     mute = true;
   };
+  var parseErrorStack = (error) => {
+    const stackLines = error.stack.split("\n");
+    const [, firstStackLine] = stackLines;
+    const match = firstStackLine.match(/\((.*):(\d+):(\d+)\)/) ?? firstStackLine.match(/at (.*):(\d+):(\d+)/);
+    if (match) {
+      const [, file, line, column] = match;
+      return {
+        file,
+        line: parseInt(line, 10),
+        column: parseInt(column, 10)
+      };
+    }
+    return null;
+  };
+  var stackInfoCache = /* @__PURE__ */ new Map();
+  var findCommentMarker = async (error, marker = "\u{1F431}\u{1F449}", searchRange = 300) => {
+    const stackInfo = parseErrorStack(error);
+    if (!stackInfo) {
+      return null;
+    }
+    try {
+      let lines;
+      if (stackInfoCache.has(stackInfo.file)) {
+        lines = stackInfoCache.get(stackInfo.file);
+      } else {
+        const response = await fetch(stackInfo.file);
+        const sourceCode = await response.text();
+        lines = sourceCode.split("\n");
+      }
+      const start = Math.max(0, stackInfo.line - searchRange - 1);
+      const end = Math.min(lines.length, stackInfo.line - 1);
+      for (let i = start; i < end; i++) {
+        if (lines[i].length > 300) {
+          continue;
+        }
+        if (lines[i].includes(marker)) {
+          return {
+            line: i + 1,
+            comment: lines[i].trim().slice(2, -2).trim()
+          };
+        }
+      }
+    } catch (fetchError) {
+      void fetchError;
+    }
+    return null;
+  };
+  var betterErrorContext = (error) => {
+    findCommentMarker(error).then((markerInfo) => {
+      if (markerInfo) {
+        console.error(`\u{1F52E} The source of the ${error.name} is most likely ${markerInfo.comment}`);
+      }
+    });
+    findCommentMarker(error, "\u{1F431}\u{1F38B}", 10).then((markerInfo) => {
+      if (markerInfo) {
+        console.error(`\u{1F52E} The source block is most likely ${markerInfo.comment}`);
+      }
+    });
+  };
   var onError = function(ev) {
+    if (ev.error) {
+      betterErrorContext(ev.error);
+    }
     if (mute) {
       return;
     }
@@ -6045,7 +6260,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
   // src/ct.release/index.ts
   /*! Made with ct.js http://ctjs.rocks/ */
   console.log(
-    "%c \u{1F63A} %c ct.js game engine %c v5.2.1 %c https://ctjs.rocks/ ",
+    "%c \u{1F63A} %c ct.js game engine %c v5.3.1 %c https://ctjs.rocks/ ",
     "background: #446adb; color: #fff; padding: 0.5em 0;",
     "background: #5144db; color: #fff; padding: 0.5em 0;",
     "background: #446adb; color: #fff; padding: 0.5em 0;",
@@ -6150,6 +6365,25 @@ ${ev.error?.stack ?? "(no stack available)"}`;
       ][0];
     },
     /**
+     * Returns whether the game is currently in debugging mode.
+     * Debug mode is usually enabled when the game is run from ct.js IDE.
+     */
+    get isDebug() {
+      return [
+        false
+      ][0];
+    },
+    /**
+     * Returns whether the game is currently in production mode.
+     * Production mode is usually enabled when the game is packaged or run from ct.js IDE
+     * with forced production mode turned on.
+     */
+    get isProduction() {
+      return [
+        true
+      ][0];
+    },
+    /**
      * Sets whether ct.js should prevent default behavior of pointer and keyboard events.
      * This is usually needed to prevent accidental zooming in page or scrolling.
      */
@@ -6188,7 +6422,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
       false
     ][0];
     if (!pixiApp.renderer.options.antialias) {
-      PIXI.settings.SCALE_MODE = PIXI.SCALE_MODES.NEAREST;
+      PIXI.BaseTexture.defaultOptions.scaleMode = PIXI.SCALE_MODES.NEAREST;
     }
     settings.targetFps = [
       60
@@ -6212,10 +6446,10 @@ ${ev.error?.stack ?? "(no stack available)"}`;
       place.debugTraceGraphics.clear();
 
       rooms_default.rootRoomOnStep.apply(rooms_default.current);
-      for (let i = 0, li = stack.length; i < li; i++) {
-        templates_default.isCopy(stack[i]) && templates_default.beforeStep.apply(stack[i]);
-        stack[i].onStep.apply(stack[i]);
-        templates_default.isCopy(stack[i]) && templates_default.afterStep.apply(stack[i]);
+      for (const item of stack) {
+        templates_default.isCopy(item) && item.onBeforeStep();
+        item.onStep();
+        templates_default.isCopy(item) && item.onAfterStep();
       }
       for (const item of pixiApp.stage.children) {
         if (!(item instanceof Room)) {
@@ -6234,12 +6468,12 @@ ${ev.error?.stack ?? "(no stack available)"}`;
         }
       }
       manageCamera();
-      for (let i = 0, li = stack.length; i < li; i++) {
-        templates_default.isCopy(stack[i]) && templates_default.beforeDraw.apply(stack[i]);
-        stack[i].onDraw.apply(stack[i]);
-        templates_default.isCopy(stack[i]) && templates_default.afterDraw.apply(stack[i]);
-        stack[i].xprev = stack[i].x;
-        stack[i].yprev = stack[i].y;
+      for (const item of stack) {
+        templates_default.isCopy(item) && item.onBeforeDraw();
+        item.onDraw();
+        templates_default.isCopy(item) && item.onAfterDraw();
+        item.xprev = item.x;
+        item.yprev = item.y;
       }
       for (const item of pixiApp.stage.children) {
         if (!(item instanceof Room)) {
@@ -6266,7 +6500,8 @@ ${ev.error?.stack ?? "(no stack available)"}`;
   window.PIXI = PIXI;
   mount();
   
-  
+  let VERSION = "0.0.3";
+
   {
     const actions = actionsLib;
     const backgrounds = backgrounds_default;
@@ -6328,6 +6563,7 @@ styles.new(
     "align": "center",
     "lineJoin": "round",
     "lineHeight": 84,
+    "padding": 0,
     "fill": "#FFFFFF",
     "dropShadow": true,
     "dropShadowBlur": 11,
@@ -6350,13 +6586,13 @@ templates.templates["Flask"] = {
         
     },
     onDraw: function () {
-        /* template Flask — core_OnDraw (On frame end event) */
+        /* 🐱👉 template Flask — On frame end event (core_OnDraw) */
 {
 
   for (const event of G.events.w.queries.flaskUpdated) {
     if (event[EC.FlaskUpdated] !== this.flaskEntity.id) continue
 
-    if (EC.FlaskDeselected in event || EC.FlaskSolved in event) {
+    if (EC.FlaskDeselected in event) {
       // Анимация отпускания
       this.yTween(0)
       this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
@@ -6374,6 +6610,13 @@ templates.templates["Flask"] = {
     }
   }
 
+  for (const solvedFlask of G.events.w.queries.flaskSolved) {
+    if (solvedFlask[EC.FlaskSolved] !== this.flaskEntity[MC.Flask].orderPosition) continue
+    // Анимация решённой колбы
+    this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
+    G.view.animate(this.viewEntity, { name: AnimationName.Bounce, duration: 1 })
+  }
+
   // this.t += u.time * 10
   // const scaleOffsetX = 0.1
   // const scaleOffsetY = 0.2
@@ -6388,7 +6631,7 @@ templates.templates["Flask"] = {
         
     },
     onCreate: function () {
-        /* template Flask — core_OnCreate (On create event) */
+        /* 🐱👉 template Flask — On create event (core_OnCreate) */
 {
 
   const PADDING = 20
@@ -6432,7 +6675,7 @@ templates.templates["Flask"] = {
   // Анимация появления
   const alphaFilter = this.alphaFilter = new PIXI.AlphaFilter(0)
   const duration = 500
-  mod( () => {
+  mod(() => {
     this.cursor = 'pointer'
     tween.add({
       obj: this.alphaFilter,
@@ -6446,10 +6689,9 @@ templates.templates["Flask"] = {
 
   this.yTween = scripts['flask.yTween'](flaskContainer)
   this.scaleTween = scripts['flask.scaleTween'](flaskContainer)
-  this.t = random(10)/* this.flask.id */
 
 }
-/* template Flask — core_OnPointerClick (OnPointerClick event) */
+/* 🐱👉 template Flask — OnPointerClick event (core_OnPointerClick) */
 this.eventMode = 'dynamic';
 this.on('pointertap', () => {
     
@@ -6461,7 +6703,7 @@ this.on('pointertap', () => {
 
 
 });
-/* template Flask — core_OnPointerEnter (OnPointerEnter event) */
+/* 🐱👉 template Flask — OnPointerEnter event (core_OnPointerEnter) */
 this.eventMode = 'dynamic';
 this.on('pointerover', () => {
     
@@ -6472,7 +6714,7 @@ this.on('pointerover', () => {
   }
 
 });
-/* template Flask — core_OnPointerLeave (OnPointerLeave event) */
+/* 🐱👉 template Flask — OnPointerLeave event (core_OnPointerLeave) */
 this.eventMode = 'dynamic';
 this.on('pointerout', () => {
     
@@ -6486,7 +6728,8 @@ this.on('pointerout', () => {
     },
     extends: {
     "cgroup": "",
-    "alpha": 1
+    "alpha": 1,
+    "editor:myCollidingCGroups": []
 }
 };
 templates.list['Flask'] = [];
@@ -6541,7 +6784,7 @@ templates.templates["F2"] = {
         
     },
     onCreate: function () {
-        /* template F2 — core_OnCreate (On create event) */
+        /* 🐱👉 template F2 — On create event (core_OnCreate) */
 {
 
     this.tex = random.dice(
@@ -6579,7 +6822,7 @@ templates.templates["Board"] = {
         
     },
     onCreate: function () {
-        /* template Board — core_OnCreate (On create event) */
+        /* 🐱👉 template Board — On create event (core_OnCreate) */
 {
 
     this.filters = [this.alphaFilter = new PIXI.AlphaFilter]
@@ -6640,7 +6883,7 @@ templates.templates["Liquid 1"] = {
         
     },
     onCreate: function () {
-        /* template Liquid 1 — core_OnCreate (On create event) */
+        /* 🐱👉 template Liquid 1 — On create event (core_OnCreate) */
 {
 const colorFilter = new PIXI.ColorMatrixFilter
 colorFilter.saturate(1.5, true)
@@ -6703,7 +6946,7 @@ templates.templates["UI.Restart"] = {
         
     },
     onCreate: function () {
-        /* template UI.Restart — core_OnCreate (On create event) */
+        /* 🐱👉 template UI.Restart — On create event (core_OnCreate) */
 {
 
   this.eventMode = 'static'
@@ -6712,7 +6955,7 @@ templates.templates["UI.Restart"] = {
   this.style.fontSize = 100
   this.style.strokeThickness = 0
 }
-/* template UI.Restart — core_OnPointerClick (OnPointerClick event) */
+/* 🐱👉 template UI.Restart — OnPointerClick event (core_OnPointerClick) */
 this.eventMode = 'dynamic';
 this.on('pointertap', () => {
     
@@ -6720,7 +6963,7 @@ this.on('pointertap', () => {
   G.events.w.add({ [EC.Restart]: true })
 
 });
-/* template UI.Restart — core_OnPointerEnter (OnPointerEnter event) */
+/* 🐱👉 template UI.Restart — OnPointerEnter event (core_OnPointerEnter) */
 this.eventMode = 'dynamic';
 this.on('pointerover', () => {
     
@@ -6742,7 +6985,7 @@ this.on('pointerover', () => {
   })
 
 });
-/* template UI.Restart — core_OnPointerLeave (OnPointerLeave event) */
+/* 🐱👉 template UI.Restart — OnPointerLeave event (core_OnPointerLeave) */
 this.eventMode = 'dynamic';
 this.on('pointerout', () => {
     
@@ -6792,14 +7035,14 @@ templates.templates["UI.StartGame"] = {
         
     },
     onCreate: function () {
-        /* template UI.StartGame — core_OnCreate (On create event) */
+        /* 🐱👉 template UI.StartGame — On create event (core_OnCreate) */
 {
 
 this.eventMode = 'static'
 this.cursor = 'pointer'
 this.style = styles.get('ui.text')
 }
-/* template UI.StartGame — core_OnPointerClick (OnPointerClick event) */
+/* 🐱👉 template UI.StartGame — OnPointerClick event (core_OnPointerClick) */
 this.eventMode = 'dynamic';
 this.on('pointertap', () => {
     
@@ -6834,16 +7077,17 @@ templates.templates["UI.Version"] = {
         
     },
     onCreate: function () {
-        /* template UI.Version — core_OnCreate (On create event) */
+        /* 🐱👉 template UI.Version — On create event (core_OnCreate) */
 {
-this.text = G.VERSION
+this.text = VERSION
 this.style = styles.get('ui.text')
 this.style.fontSize = 32
 }
 
     },
     extends: {
-    "cgroup": ""
+    "cgroup": "",
+    "editor:myCollidingCGroups": []
 }
 };
 templates.list['UI.Version'] = [];
@@ -6864,7 +7108,7 @@ templates.templates["UI.PopupBackdrop"] = {
         
     },
     onDraw: function () {
-        /* template UI.PopupBackdrop — core_OnDraw (On frame end event) */
+        /* 🐱👉 template UI.PopupBackdrop — On frame end event (core_OnDraw) */
 {
 
     const { width, height } = camera
@@ -6877,7 +7121,7 @@ templates.templates["UI.PopupBackdrop"] = {
         
     },
     onCreate: function () {
-        /* template UI.PopupBackdrop — core_OnCreate (On create event) */
+        /* 🐱👉 template UI.PopupBackdrop — On create event (core_OnCreate) */
 {
     this.eventMode = 'static'
     this.zIndex = -10000
@@ -6944,7 +7188,7 @@ rooms.templates['Game'] = {
         
     },
     onCreate() {
-        /* room Game — core_OnRoomStart (On room start event) */
+        /* 🐱👉 room Game — On room start event (core_OnRoomStart) */
 {
 
     G.ui[Templates.Game] = this
@@ -7042,7 +7286,7 @@ rooms.templates['UI.MainMenu'] = {
         
     },
     onCreate() {
-        /* room UI.MainMenu — core_OnRoomStart (On room start event) */
+        /* 🐱👉 room UI.MainMenu — On room start event (core_OnRoomStart) */
 {
 
     this.alpha = 0
@@ -7078,7 +7322,7 @@ rooms.templates['UI.PauseMenu'] = {
         
     },
     onCreate() {
-        /* room UI.PauseMenu — core_OnRoomStart (On room start event) */
+        /* 🐱👉 room UI.PauseMenu — On room start event (core_OnRoomStart) */
 {
 
     templates.copyIntoRoom('UI.PopupBackdrop', 0, 0, this)
@@ -7273,7 +7517,33 @@ const place = (function ctPlace() {
 
     // Premade filter predicates to avoid function creation and memory bloat during the game loop.
     const templateNameFilter = (target, other, template) => other.template === template;
-    const cgroupFilter = (target, other, cgroup) => !cgroup || cgroup === other.cgroup;
+    const cgroupFilter = (target, other, cgroup) => cgroup === other.cgroup;
+    const cgroupSetFilter = (target, other, cgroup) => cgroup.has(other.cgroup);
+    const allFilter = () => true;
+
+    /**
+     * Returns a collision filter predicate and a suitable argument
+     * based on the provided collision group.
+     * @param {ICopy} target The copy to check collisions for
+     * @param {*} cgroup The collision group/groups to check against
+     * @returns {[() => boolean, Set<string> | string]} A tuple containing the collision
+     * filter predicate and the argument for the predicate.
+     */
+    const getCollisionFilterPair = (target, cgroup) => {
+        if (!cgroup) {
+            return [allFilter, cgroup];
+        }
+
+        if (typeof cgroup === 'string') {
+            return [cgroupFilter, cgroup];
+        }
+
+        if (Array.isArray(cgroup)) {
+            cgroup = new Set(cgroup);
+        }
+
+        return [cgroupSetFilter, cgroup];
+    };
 
     // Core collision-checking method that accepts various filtering predicates
     // and a variable partitioning grid.
@@ -7503,11 +7773,12 @@ const place = (function ctPlace() {
                 x = void 0;
                 y = void 0;
             }
+            const [predicateFilter, predicateValue] = getCollisionFilterPair(target, cgroup);
             const copies = genericCollisionQuery(
                 target, x, y,
                 place.grid,
                 false,
-                cgroupFilter, cgroup
+                predicateFilter, predicateValue
             );
             // Was any suitable copy found? Return it immediately and skip the query for tiles.
             if (copies) {
@@ -7518,7 +7789,7 @@ const place = (function ctPlace() {
                 target, x, y,
                 place.tileGrid,
                 false,
-                cgroupFilter, cgroup
+                predicateFilter, predicateValue
             );
         },
         occupiedMultiple(target, x, y, cgroup) {
@@ -7528,17 +7799,18 @@ const place = (function ctPlace() {
                 x = void 0;
                 y = void 0;
             }
+            const [predicateFilter, predicateValue] = getCollisionFilterPair(target, cgroup);
             const copies = genericCollisionQuery(
                 target, x, y,
                 place.grid,
                 true,
-                cgroupFilter, cgroup
+                predicateFilter, predicateValue
             );
             const tiles = genericCollisionQuery(
                 target, x, y,
                 place.tileGrid,
                 true,
-                cgroupFilter, cgroup
+                predicateFilter, predicateValue
             );
             return copies.concat(tiles);
         },
@@ -7580,11 +7852,12 @@ const place = (function ctPlace() {
                 x = void 0;
                 y = void 0;
             }
+            const [predicateFilter, predicateValue] = getCollisionFilterPair(target, cgroup);
             return genericCollisionQuery(
                 target, x, y,
                 place.grid,
                 false,
-                cgroupFilter, cgroup
+                predicateFilter, predicateValue
             );
         },
         copiesMultiple(target, x, y, cgroup) {
@@ -7594,11 +7867,12 @@ const place = (function ctPlace() {
                 x = void 0;
                 y = void 0;
             }
+            const [predicateFilter, predicateValue] = getCollisionFilterPair(target, cgroup);
             return genericCollisionQuery(
                 target, x, y,
                 place.grid,
                 true,
-                cgroupFilter, cgroup
+                predicateFilter, predicateValue
             );
         },
         tiles(target, x, y, cgroup) {
@@ -7608,11 +7882,12 @@ const place = (function ctPlace() {
                 x = void 0;
                 y = void 0;
             }
+            const [predicateFilter, predicateValue] = getCollisionFilterPair(target, cgroup);
             return genericCollisionQuery(
                 target, x, y,
                 place.tileGrid,
                 false,
-                cgroupFilter, cgroup
+                predicateFilter, predicateValue
             );
         },
         tilesMultiple(target, x, y, cgroup) {
@@ -7622,11 +7897,12 @@ const place = (function ctPlace() {
                 x = void 0;
                 y = void 0;
             }
+            const [predicateFilter, predicateValue] = getCollisionFilterPair(target, cgroup);
             return genericCollisionQuery(
                 target, x, y,
                 place.tileGrid,
                 true,
-                cgroupFilter, cgroup
+                predicateFilter, predicateValue
             );
         },
         lastdist: null,
@@ -7670,12 +7946,19 @@ const place = (function ctPlace() {
                 throw new Error('[place] The tilemap already has collisions enabled.');
             }
             tilemap.cgroup = cgroup;
+            const onDestroyTile = function () {
+                for (const hash of this.$chashes) {
+                    const ind = place.tileGrid[hash].indexOf(this);
+                    place.tileGrid[hash].splice(ind, 1);
+                }
+            };
             // Prebake hashes and SSCD shapes for all the tiles
             for (const pixiSprite of tilemap.pixiTiles) {
                 // eslint-disable-next-line no-underscore-dangle
                 pixiSprite._shape = getSSCDShape(pixiSprite);
                 pixiSprite.cgroup = cgroup;
                 pixiSprite.$chashes = place.getHashes(pixiSprite);
+                pixiSprite.on('destroyed', onDestroyTile);
                 /* eslint max-depth: 0 */
                 for (const hash of pixiSprite.$chashes) {
                     if (!(hash in place.tileGrid)) {
@@ -8091,6 +8374,14 @@ const place = (function ctPlace() {
     Object.defineProperty(templates.CopyProto, 'moveSmart', {
         value: function (cgroup, precision) {
             return this.moveContinuousByAxes(cgroup, precision);
+        }
+    });
+    Object.defineProperty(templates.CopyProto, 'editor:myCollidingCGroups', {
+        set: function (collisionGroups) {
+            this.myCollidingCGroups = new Set(collisionGroups);
+        },
+        get: function () {
+            return this.myCollidingCGroups;
         }
     });
     Object.defineProperty(templates.Tilemap.prototype, 'enableCollisions', {
@@ -10163,7 +10454,11 @@ globalThis.fsm = {
 };
 })();
 
-  ;
+  
+/* 🐱👉 Project script GP */
+;
+
+/* 🐱👉 Project script U */
 function mod(fn) { return fn() }
 
 const utils = mod(() => {
@@ -10223,6 +10518,8 @@ class Switch {
     }
   }
 };
+
+/* 🐱👉 Project script ECS */
  function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 
 
@@ -10996,6 +11293,8 @@ const ECS = mod(() => {
 
   return { World, Query }
 });
+
+/* 🐱👉 Project script Main */
  function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
 
 
@@ -11140,6 +11439,8 @@ var Priority; (function (Priority) {
 
 
 const createSystem = ({ PRIORITY = 0, name = '', ...events } = {}) => ({ PRIORITY, name, ...events });
+
+/* 🐱👉 Project script Model */
 var MC; (function (MC) {
   const Flask = 'Flask'; MC["Flask"] = Flask;
   const Board = 'Board'; MC["Board"] = Board;
@@ -11257,6 +11558,8 @@ class TimeService {constructor() { TimeService.prototype.__init6.call(this); }
   __init6() {this.total = 0}
 }
 ;
+
+/* 🐱👉 Project script Events */
 var EC; (function (EC) {
   const SetBoard = 'SetBoard'; EC["SetBoard"] = SetBoard;
   const BoardGenerated = 'BoardGenerated'; EC["BoardGenerated"] = BoardGenerated;
@@ -11352,6 +11655,8 @@ const createEventWorld = () => {
 }
 
 var ClickType; (function (ClickType) { const Primary = 0; ClickType[ClickType["Primary"] = Primary] = "Primary"; const Secondary = Primary + 1; ClickType[ClickType["Secondary"] = Secondary] = "Secondary"; const Unknown = Secondary + 1; ClickType[ClickType["Unknown"] = Unknown] = "Unknown"; })(ClickType || (ClickType = {}));;
+
+/* 🐱👉 Project script View */
 var VC; (function (VC) {
   const ModelID = 'ModelID'; VC["ModelID"] = ModelID;
   const Copy = 'Copy'; VC["Copy"] = Copy;
@@ -11432,6 +11737,7 @@ class ViewService {constructor() { ViewService.prototype.__init.call(this);ViewS
 var AnimationName; (function (AnimationName) {
   const SineAlpha = 'SineAlpha'; AnimationName["SineAlpha"] = SineAlpha;
   const Shake = 'Shake'; AnimationName["Shake"] = Shake;
+  const Bounce = 'Bounce'; AnimationName["Bounce"] = Bounce;
 })(AnimationName || (AnimationName = {}));
 
 
@@ -11464,6 +11770,8 @@ var BoardViewState; (function (BoardViewState) {
 
 
 ;
+
+/* 🐱👉 Project script View.themes */
 
 
 
@@ -11595,6 +11903,8 @@ const themes = {
 
 let theme = themes.fruit_mix
 ;
+
+/* 🐱👉 Project script Game */
 var GameState; (function (GameState) {
     const Launching = 'Launching'; GameState["Launching"] = Launching;
     const MainMenu = 'MainMenu'; GameState["MainMenu"] = MainMenu;
@@ -11611,6 +11921,8 @@ class LevelService {constructor() { LevelService.prototype.__init.call(this); }
 }
 ;
 
+/* 🐱👉 Project script service.UI */
+
 
 
 var Templates; (function (Templates) {
@@ -11620,6 +11932,8 @@ var Templates; (function (Templates) {
     const BoardRoom = 'BoardRoom'; Templates["BoardRoom"] = BoardRoom;
     const PauseMenu = 'UI.PauseMenu'; Templates["PauseMenu"] = PauseMenu;
 })(Templates || (Templates = {}));;
+
+/* 🐱👉 Project script G */
 const G = {
   main: new Main,
   game: { state: GameState.Launching } ,
@@ -11637,10 +11951,11 @@ const G = {
     return !!G.events.w.queries[eventQuery].size
   },
   ui: {} ,
-  VERSION: '0.0.2' 
 }
 
 Object.assign(globalThis, { G });
+
+/* 🐱👉 Project script ysdk */
 
 
 
