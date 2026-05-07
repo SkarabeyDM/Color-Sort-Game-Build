@@ -4369,7 +4369,8 @@ if (!this.kill) {
        * @catnipIgnore
        */
       afterDraw() {
-        for (const p of pointer.down) {
+        keyboard.clear();
+for (const p of pointer.down) {
     p.xprev = p.x;
     p.yprev = p.y;
     p.xuiprev = p.x;
@@ -4384,7 +4385,6 @@ for (const p of pointer.hover) {
 inputs.registry['pointer.Wheel'] = 0;
 pointer.clearReleased();
 pointer.xmovement = pointer.ymovement = 0;
-keyboard.clear();
 
         if (this.behaviors.length) {
           runBehaviors(this, "rooms", "thisOnDraw");
@@ -5184,8 +5184,8 @@ keyboard.clear();
     board.state = BoardState.Unsolved
     add({ [EC.BoardGenerated]: true })
     for (const entity of G.model.w.queries.flask) {
-      const { orderPosition } = entity[MC.Flask]
-      add({ [EC.FlaskUpdated]: orderPosition })
+      const { index } = entity[MC.Flask]
+      add({ [EC.FlaskUpdated]: index })
     }
   }
 
@@ -5212,7 +5212,7 @@ keyboard.clear();
     }
 
     flasks.forEach((flask, id) => {
-      flask.orderPosition = id
+      flask.index = id
       Flask.updateState(flask)
     })
 
@@ -5255,8 +5255,10 @@ keyboard.clear();
       const colors = getTypes(board)
       const sortedFlasks = getSortedFlasks(board, colors)
       const flasks = getUnsortedFlasks(board, sortedFlasks)
-      // board.flasks = flasks
-      flasks.forEach(flask => G.model.w.add({ [MC.Flask]: flask }))
+      flasks.forEach(flask => {
+        const entity = G.model.w.add({ [MC.Flask]: flask })
+        G.model.flasks[flask.index] = entity
+      })
       G.model.w.add({ [MC.Board]: board })
       G.model.board = board
 
@@ -5268,13 +5270,12 @@ keyboard.clear();
  function _nullishCoalesce(lhs, rhsFn) { if (lhs != null) { return lhs; } else { return rhsFn(); } } function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
   function getSelected() { return G.model.w.queries.selectedFlask.first }
 
-  function select(id, selected) {
-    const flaskEntity = G.model.w.queries.flask.entity(id)
+  function select(index, selected) {
+    const flaskEntity = G.model.flasks[index]
 
     if (!flaskEntity) return
     const flask = flaskEntity[MC.Flask]
     const isSelectable = Flask.isSelectable(flaskEntity[MC.Flask])
-
     if (!selected && isSelectable) selectFlask(flaskEntity)
     else if (!selected && !isSelectable) failSelection(flaskEntity)
     else if (selected === flaskEntity) deselectCurrentFlask()
@@ -5282,56 +5283,57 @@ keyboard.clear();
       deselectCurrentFlask()
       selectFlask(flaskEntity)
     }
-    else tryPour(flaskEntity)
+    else tryPour(selected[MC.Flask].index, index)
   }
 
-  function tryPour(entity) {
-    G.events.w.add({ [EC.TryPour]: entity.id })
+  function tryPour(from, to) {
+    G.events.w.add({ [EC.TryPour]: { from, to, count: null } })
   }
 
   function selectFlask(entity) {
     G.model.w.addComponent(entity, MC.IsSelected)
-    entity[MC.Flask].selection = SelectionState.Selected
-    const { id } = entity
-    G.events.w.add({ [EC.FlaskSelected]: id, [EC.FlaskUpdated]: id })
+    const flask = entity[MC.Flask]
+    flask.selection = SelectionState.Selected
+    const { index } = flask
+    G.events.w.add({ [EC.FlaskSelected]: index, [EC.FlaskUpdated]: index })
   }
 
   function deselectCurrentFlask() {
     const flaskEntity = getSelected()
     if (!flaskEntity) return
+    const flask = flaskEntity[MC.Flask]
     G.model.w.removeComponent(flaskEntity, MC.IsSelected)
     flaskEntity[MC.Flask].selection = SelectionState.NotSelected
-    const { id } = flaskEntity
+    const { index } = flask
 
-    G.events.w.add({ [EC.FlaskDeselected]: id, [EC.FlaskUpdated]: id })
+    G.events.w.add({ [EC.FlaskDeselected]: index, [EC.FlaskUpdated]: index })
   }
 
   function failSelection(entity) {
-    const { id } = entity
-    G.events.w.add({ [EC.FlaskSelectionFailed]: id, [EC.FlaskUpdated]: id })
+    const { index } = entity[MC.Flask]
+    G.events.w.add({ [EC.FlaskSelectionFailed]: index, [EC.FlaskUpdated]: index })
   }
 
   return createSystem({
     onFlaskSelection() {
-      const { board, w } = G.model
-      if (_optionalChain([board, 'optionalAccess', _ => _.state]) !== BoardState.Unsolved) return
+      if (_optionalChain([G, 'access', _ => _.model, 'access', _2 => _2.board, 'optionalAccess', _3 => _3.state]) !== BoardState.Unsolved) return
       const event = G.events.w.queries.flaskClicked.first
       if (!event) return
-      const id = _nullishCoalesce(event[EC.FlaskClicked], () => ( -1))
-      const clickType = _optionalChain([event, 'optionalAccess', _2 => _2[EC.ClickType]])
+      const index = _nullishCoalesce(event[EC.FlaskClicked], () => ( -1))
+      const clickType = _optionalChain([event, 'optionalAccess', _4 => _4[EC.ClickType]])
       const selected = getSelected()
-      const isClickedSelected = _optionalChain([selected, 'optionalAccess', _3 => _3.id]) === id
+      const isClickedSelected = _optionalChain([selected, 'optionalAccess', _5 => _5[MC.Flask], 'access', _6 => _6.index]) === index
 
       if (clickType === ClickType.Secondary) {
-        if (isClickedSelected || id === -1)
+        if (isClickedSelected || index === -1)
           return deselectCurrentFlask()
 
-        const flaskEntity = w.queries.flask.entity(id)
+        const flaskEntity = G.model.flasks[index]
         if (!Flask.isSelectable(flaskEntity[MC.Flask])) return failSelection(flaskEntity)
         deselectCurrentFlask()
         selectFlask(flaskEntity)
       }
-      else if (clickType === ClickType.Primary) select(id, selected)
+      else if (clickType === ClickType.Primary) select(index, selected)
     },
 
     onAfterPouring() {
@@ -5343,38 +5345,74 @@ keyboard.clear();
 /* 🐱👉 Script asset Pouring.sys */
 
 
-  function canPour(from, to) {
+  function canPour(from, to, ignoreType = false) {
     const { [MC.Flask]: fromFlask } = from
     const { [MC.Flask]: toFlask } = to
-    return toFlask.stack.length < toFlask.volume && (Flask.peak(fromFlask) === Flask.peak(toFlask) || toFlask.state === FlaskState.Empty)
+    const hasPlace = toFlask.stack.length < toFlask.volume
+    const arePeakTypesSame = Flask.peak(fromFlask) === Flask.peak(toFlask) || toFlask.state === FlaskState.Empty
+    return hasPlace && (arePeakTypesSame || ignoreType)
   }
 
-  function pour(from, to) {
-    const { [MC.Flask]: fromFlask } = from
-    const { [MC.Flask]: toFlask } = to
-    const startBall = fromFlask.stack[fromFlask.stack.length - 1]
-    for (let nextBall = startBall; nextBall === startBall && toFlask.stack.length < toFlask.volume;) {
+  function pour(from, to, count) {
+    const { [MC.Flask]: fromFlask } = G.model.flasks[from]
+    const { [MC.Flask]: toFlask } = G.model.flasks[to]
+
+    for (let i = 0; i < count; i++) {
       const ball = fromFlask.stack.pop()
       toFlask.stack.push(ball)
-      nextBall = fromFlask.stack[fromFlask.stack.length - 1]
     }
+    const pourPayload = { from: fromFlask.index, to: toFlask.index, count }
 
-    G.events.w.add({ [EC.Poured]: to.id, [EC.FlaskUpdated]: to.id })
+    G.events.w.add({ [EC.Poured]: pourPayload })
+  }
+
+  function countPour(from, to, ignoreLiquidType = false, max = Infinity) {
+    const f1 = G.model.flasks[from][MC.Flask]
+    const f2 = G.model.flasks[to][MC.Flask]
+
+    const f1Peak = Flask.peak(f1)
+    const toMax = f2.volume - f2.stack.length
+    let fromMax = 0
+    if (f1Peak !== undefined)
+      for (let i = f1.stack.length - 1; i >= 0; i--) {
+        const liquid = f1.stack[i]
+        if (!ignoreLiquidType && liquid !== f1Peak) break
+        else fromMax++
+      }
+
+    return Math.min(fromMax, toMax, max)
+  }
+
+  function tryPour(payload, ignoreType = false) {
+    const { flasks } = G.model
+    const from = flasks[payload.from]
+    const to = flasks[payload.to]
+    if (!from || !to) return false
+    if (!canPour(from, to, ignoreType)) {
+      const iFrom = from[MC.Flask].index
+      const iTo = to[MC.Flask].index
+      G.events.w.add({ [EC.PourFailed]: { to: iTo, from: iFrom, count: 0 } })
+      return false
+    }
+    return true
   }
 
   return createSystem({
     onPouring() {
-      const { w: { queries } } = G.model
       for (const event of G.events.w.queries.tryPour) {
-        const from = queries.selectedFlask.first
-        const to = queries.flask.entity(event[EC.TryPour])
-        if (!from || !to) continue
-        if (!canPour(from, to)) {
-          G.events.w.add({ [EC.PourFailed]: { to: to.id, from: from.id }, [EC.FlaskUpdated]: to.id })
-          G.events.w.add({ [EC.PourFailed]: { to: to.id, from: from.id }, [EC.FlaskUpdated]: from.id })
-          continue
-        }
-        pour(from, to)
+        const pourPayload = event[EC.TryPour]
+        if (!tryPour(pourPayload)) continue
+        const { from, to } = pourPayload
+
+        pour(from, to, countPour(from, to))
+      }
+
+      for (const event of G.events.w.queries.pour) {
+        const pourPayload = event[EC.Pour]
+        if (!tryPour(pourPayload, true)) continue
+        const { from, to } = pourPayload
+
+        pour(from, to, countPour(from, to, true, pourPayload.count))
       }
     }
   })},'FlaskState.sys': function (options) {
@@ -5392,9 +5430,9 @@ keyboard.clear();
         const isChanged = Flask.updateState(flask)
 
         if (isChanged) {
-          const event = { [EC.FlaskStateChanged]: flask.orderPosition, [EC.FlaskUpdated]: flask.orderPosition }
+          const event = { [EC.FlaskStateChanged]: flask.index, [EC.FlaskUpdated]: flask.index }
           if (flask.state === FlaskState.Solved) {
-            event[EC.FlaskSolved] = flask.orderPosition
+            event[EC.FlaskSolved] = flask.index
           }
 
           add(event)
@@ -5443,6 +5481,34 @@ keyboard.clear();
     return createSystem({
         onEnd() {
             G.model.w.clear()
+            G.model.flasks = []
+        }
+    })},'Undo.sys': function (options) {
+/* 🐱👉 Script asset Undo.sys */
+
+
+    return createSystem({
+        onInput() {
+            const { undoStack } = G.model.history
+            for (const _ of G.events.w.queries.undoInput) {
+                if (undoStack.length <= 0) continue
+                const { from, to, count } = undoStack.pop()
+                G.main.pour(to, from, count)
+            }
+        },
+
+        onAfterPouring() {
+            for (const pouredEvent of G.events.w.queries.poured) {
+                G.model.history.undoStack.push(pouredEvent[EC.Poured])
+            }
+
+            for (const _ of G.events.w.queries.undoInput) {
+                G.model.history.undoStack.pop()
+            }
+        },
+
+        onEnd() {
+            utils.clearArray(G.model.history.undoStack)
         }
     })},'flask.yTween': function (options) {
 /* 🐱👉 Script asset flask.yTween */
@@ -5480,12 +5546,13 @@ keyboard.clear();
     const PADDING = 20
 
     function drawLiquidLayers(view) {
-        const modelEntity =G.model.w.queries.flask.entity(view[VC.ModelID])
-        if(!modelEntity) return
+        const viewData = view[VC.Flask]
+        const modelEntity = G.model.flasks[viewData.index]
+        if (!modelEntity) return
         const model = modelEntity[MC.Flask]
         compareViewAndModel(model)
         syncSpritesWithModel(view)
-        placeSprites(view[VC.LiquidLayers], view[VC.Volume])
+        placeSprites(viewData.layers, viewData.volume)
     }
 
     const modelGroups = []
@@ -5503,7 +5570,7 @@ keyboard.clear();
     const newLayers = []
     // Добавляет и удаляет спрайты
     function syncSpritesWithModel(flaskView) {
-        const layers = flaskView[VC.LiquidLayers]
+        const { layers, liquidContainerCopy } = flaskView[VC.Flask]
         for (let m = 0, v = 0; m < modelGroups.length || v < layers.length;) {
             const layer = G.view.w.entity(layers[v])
             const model = modelGroups[m]
@@ -5519,7 +5586,7 @@ keyboard.clear();
                     v++
                 }
             } else if (model && !layer) {
-                addLayer(model, flaskView[VC.LiquidContainer])
+                addLayer(model, liquidContainerCopy)
                 m++
             } else if (!model && layer) {
                 removeLayer(layer)
@@ -5528,7 +5595,7 @@ keyboard.clear();
                 v++
             }
         }
-        utils.setArray(newLayers, flaskView[VC.LiquidLayers])
+        utils.setArray(newLayers, layers)
         utils.clearArray(newLayers)
     }
 
@@ -5718,9 +5785,9 @@ keyboard.clear();
     }
 
     async function hide({ mainMenu }) {
+        mainMenu.eventMode = 'none' // Меню должно блокироваться в начале анимации
         await tween.add({ obj: mainMenu, duration: 500, silent: true, fields: { alpha: 0 } })
         mainMenu.visible = false
-        mainMenu.eventMode = 'none'
     }
 
     function show({ mainMenu }) {
@@ -5796,9 +5863,9 @@ keyboard.clear();
         for (const flaskView of G.view.w.queries.flask) {
             const copy = flaskView[VC.Copy]
             const count = G.model.w.queries.flask.size
-            const { orderPosition } = G.model.w.queries.flask.entity(flaskView[VC.ModelID])[MC.Flask]
+            const { index } = flaskView[VC.Flask]
             // Анимация исчезновения
-            const t = u.map(orderPosition, 0, count - 1, 0, 1)
+            const t = u.map(index, 0, count - 1, 0, 1)
             const delay = Math.max(1, t * 1000)
             const duration = 500
             animations.push(mod(async () => {
@@ -5835,6 +5902,7 @@ keyboard.clear();
 
     function eraseBoard() {
         rooms.remove(rooms.list['Level'][0])
+        G.view.flasks = []
     }
 
     function drawBoard() {
@@ -5844,22 +5912,22 @@ keyboard.clear();
         const
             boardWidth = container.width,
             boardHeight = container.height
-        const pointA = { x: 0, y: 0 }, pointB = container.position.clone().set(container.width, container.height)
+        const topLeft = { x: 0, y: 0 }, bottomRight = container.position.clone().set(container.width, container.height)
         const count = G.model.w.queries.flask.size
         const rows = Math.ceil(((flaskWidth + H_GAP) * count - H_GAP) / boardWidth)
         const cols = Math.ceil(count / rows) || 1
         const colHeight = rows * flaskHeight + V_GAP * (rows - 1),
             boardVSpace = boardHeight - colHeight,
-            boardTop = pointA.y + boardVSpace / 2,
-            boardBottom = pointB.y - boardVSpace / 2
+            boardTop = topLeft.y + boardVSpace / 2,
+            boardBottom = bottomRight.y - boardVSpace / 2
         const rowWidth = cols * flaskWidth + H_GAP * (cols - 1),
             boardHSpace = boardWidth - rowWidth,
-            boardLeft = pointA.y + boardHSpace / 2,
-            boardRight = pointB.y - boardHSpace / 2
+            boardLeft = topLeft.y + boardHSpace / 2,
+            boardRight = bottomRight.y - boardHSpace / 2
 
         for (const flaskEntity of G.model.w.queries.flask) {
             const flask = flaskEntity[MC.Flask]
-            const i = flask.orderPosition
+            const i = flask.index
             const t = u.map(i, 0, board.count - 1, 0, 1)
             const delay = Math.max(1, t * 1000)
             timer.add(delay).then(() => {
@@ -5867,16 +5935,13 @@ keyboard.clear();
                 const col = i - row * cols
                 const x = u.map(col, 0, (cols - 1) || 1, boardLeft, boardRight - flaskWidth)
                 const y = u.map(row, 0, (rows - 1) || 1, boardTop, boardBottom - flaskHeight)
-                const viewEntity = G.view.w.add({
-                    [VC.IsFlask]: true,
-                    [VC.ModelID]: flaskEntity.id,
-                    [VC.Volume]: flask.volume,
-                    [VC.LiquidLayers]: [],
-                })
+                const viewEntity = {}
                 const copy = templates.copy('Flask', x, y, { flaskEntity, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity }) 
                 viewEntity[VC.Copy] = copy
-                viewEntity[VC.LiquidContainer] = copy.liquidContainer
+                viewEntity[VC.Flask] = { copy, index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer }
+                G.view.w.add(viewEntity)
                 container.addChild(copy)
+                G.view.flasks[flask.index] = viewEntity
             })
         }
 
@@ -5909,7 +5974,6 @@ keyboard.clear();
     const { UPDATE } = AnimationEvent
     const ANIMATIONS = scripts['Animations.subsys']()
     const DEFAULT_FIELDS = { alpha: 1, position: new PIXI.Point, offset: new PIXI.Point, scale: new PIXI.Point(1), angle: 0 }
-    const FIELD_NAMES = Object.keys(DEFAULT_FIELDS)
     const FIELD_BUFFER = JSON.parse(JSON.stringify(DEFAULT_FIELDS))
 
     const animationFSM = new fsm.HFSM({
@@ -5940,9 +6004,9 @@ keyboard.clear();
         context.t = u.clamp(0, u.map(G.time.total, start, start + duration, 0, 1), 1)
     }
 
-    function start(context) { _optionalChain([ANIMATIONS, 'access', _2 => _2[context.name], 'optionalAccess', _3 => _3.start, 'call', _4 => _4(context)]) }
-    function update(context) { _optionalChain([ANIMATIONS, 'access', _5 => _5[context.name], 'optionalAccess', _6 => _6.update, 'call', _7 => _7(context)]) }
-    function end(context) { _optionalChain([ANIMATIONS, 'access', _8 => _8[context.name], 'optionalAccess', _9 => _9.end, 'call', _10 => _10(context)]) }
+    function start(context) { _optionalChain([ANIMATIONS, 'access', _2 => _2[context.name], 'access', _3 => _3.start, 'optionalCall', _4 => _4(context)]) }
+    function update(context) { _optionalChain([ANIMATIONS, 'access', _5 => _5[context.name], 'access', _6 => _6.update, 'optionalCall', _7 => _7(context)]) }
+    function end(context) { _optionalChain([ANIMATIONS, 'access', _8 => _8[context.name], 'access', _9 => _9.end, 'optionalCall', _10 => _10(context)]) }
 
     function calcFields(fields) {
         if (fields.alpha) FIELD_BUFFER.alpha += fields.alpha
@@ -5999,14 +6063,15 @@ keyboard.clear();
                     G.view.w.remove(animation)
             }
         }
-    })},'Shake.subsys': function (options) {
-/* 🐱👉 Script asset Shake.subsys */
+    })},'Shake.anim': function (options) {
+/* 🐱👉 Script asset Shake.anim */
 
 
     const AMPLITUDE = 5
     const FREQUIENCY = 2
 
-    const shake = {
+    return {
+        name: AnimationName.Shake,
         start(data) {
             const { fields, other } = data
             other.xOffset = random.range(-0.5, 0.5)
@@ -6017,27 +6082,24 @@ keyboard.clear();
             fields.position.x = Math.sin(t * FREQUIENCY * (2 + other.xOffset) * Math.PI) * AMPLITUDE;
             fields.position.y = Math.cos(t * FREQUIENCY * (2 + other.yOffset) * Math.PI) * AMPLITUDE;
         },
-        end({ fields }) {
-            fields.position.x = 0
-            fields.position.y = 0
-        }
-    }
-
-    return shake},'Animations.subsys': function (options) {
+    } },'Animations.subsys': function (options) {
 /* 🐱👉 Script asset Animations.subsys */
 
 
-    return {
-        [AnimationName.Shake]: scripts['Shake.subsys'](),
-        [AnimationName.Bounce]: scripts['Bounce.subsys'](),
-    }},'Bounce.subsys': function (options) {
-/* 🐱👉 Script asset Bounce.subsys */
+    return Object.fromEntries(Object.entries(scripts)
+        .filter(([scriptName]) => scriptName.endsWith('.anim'))
+        .map(([, script]) => {
+            const animationHandler = script()
+            return [animationHandler.name, animationHandler]
+        }))},'Bounce.anim': function (options) {
+/* 🐱👉 Script asset Bounce.anim */
 
 
     const MAX_AMPLITUDE = 64
     const BOUNCES = 5
 
-    const shake = {
+    return {
+        name: AnimationName.Bounce,
         start(data) {
             const { fields } = data
             fields.position = new PIXI.Point()
@@ -6054,13 +6116,8 @@ keyboard.clear();
                 force = 1 - (currentBounce / BOUNCES) ** 0.5
             }
             fields.position.y = -Math.abs(sin) * MAX_AMPLITUDE * force
-        },
-        end({ fields }) {
-            fields.position.y = 0
         }
-    }
-
-    return shake
+    } 
 },'Level.sys': function (options) {
 /* 🐱👉 Script asset Level.sys */
 
@@ -6081,7 +6138,11 @@ keyboard.clear();
         G.main.startLevel(config)
       }
     }
-  })},'LEVEL_CONFIGS': function (options) {
+  })},'FlaskClick.sys': function (options) {
+/* 🐱👉 Script asset FlaskClick.sys */
+
+
+    return createSystem()},'LEVEL_CONFIGS': function (options) {
 /* 🐱👉 Script asset LEVEL_CONFIGS */
 
 
@@ -6590,7 +6651,7 @@ templates.templates["Flask"] = {
 {
 
   for (const event of G.events.w.queries.flaskUpdated) {
-    if (event[EC.FlaskUpdated] !== this.flaskEntity.id) continue
+    if (event[EC.FlaskUpdated] !== this.viewEntity[VC.Flask].index) continue
 
     if (EC.FlaskDeselected in event) {
       // Анимация отпускания
@@ -6610,8 +6671,17 @@ templates.templates["Flask"] = {
     }
   }
 
+  for (const pourFailed of G.events.w.queries.pourFailed) {
+    const { from, to } = pourFailed[EC.PourFailed]
+    const { index } = this.viewEntity[VC.Flask]
+    if (from !== index && to !== index) continue
+
+    // Анимация отказа
+    G.view.animate(this.viewEntity, { name: AnimationName.Shake, duration: 0.3 })
+  }
+
   for (const solvedFlask of G.events.w.queries.flaskSolved) {
-    if (solvedFlask[EC.FlaskSolved] !== this.flaskEntity[MC.Flask].orderPosition) continue
+    if (solvedFlask[EC.FlaskSolved] !== this.viewEntity[VC.Flask].index) continue
     // Анимация решённой колбы
     this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
     G.view.animate(this.viewEntity, { name: AnimationName.Bounce, duration: 1 })
@@ -6623,6 +6693,7 @@ templates.templates["Flask"] = {
   // const sX = u.map(Math.sin(this.t), -1, 1, 1 - scaleOffsetX, 1 + scaleOffsetX)
   // const sY = u.map(Math.cos(this.t), -1, 1, 1 - scaleOffsetY, 1 + scaleOffsetY)
   // this.flaskContainer.scale.set(sX, sY)
+
 
 }
 
@@ -6699,7 +6770,7 @@ this.on('pointertap', () => {
   let clickType = ClickType.Unknown
   actions.Press.down && (clickType = ClickType.Primary)
   actions.AltPress.down && (clickType = ClickType.Secondary)
-  G.events.w.add({ [EC.FlaskClicked]: this.flaskEntity.id, [EC.ClickType]: clickType })
+  G.events.w.add({ [EC.FlaskClicked]: this.viewEntity[VC.Flask].index, [EC.ClickType]: clickType })
 
 
 });
@@ -7011,7 +7082,8 @@ this.on('pointerout', () => {
     },
     extends: {
     "cgroup": "",
-    "alpha": 0.5
+    "alpha": 0.5,
+    "editor:myCollidingCGroups": []
 }
 };
 templates.list['UI.Restart'] = [];
@@ -7053,7 +7125,8 @@ this.on('pointertap', () => {
 
     },
     extends: {
-    "cgroup": ""
+    "cgroup": "",
+    "editor:myCollidingCGroups": []
 }
 };
 templates.list['UI.StartGame'] = [];
@@ -7135,6 +7208,96 @@ templates.templates["UI.PopupBackdrop"] = {
 }
 };
 templates.list['UI.PopupBackdrop'] = [];
+        
+templates.templates["UI.UndoButton"] = {
+    name: "UI.UndoButton",
+    depth: 0,
+    blendMode: PIXI.BLEND_MODES.NORMAL,
+    visible: true,
+    baseClass: "Text",
+    
+        defaultText: "↩",
+    behaviors: JSON.parse('[]'),
+    onStep: function () {
+        
+    },
+    onDraw: function () {
+        
+    },
+    onDestroy: function () {
+        
+    },
+    onCreate: function () {
+        /* 🐱👉 template UI.UndoButton — OnPointerClick event (core_OnPointerClick) */
+this.eventMode = 'dynamic';
+this.on('pointertap', () => {
+    
+
+    G.main.undo()
+
+});
+/* 🐱👉 template UI.UndoButton — On create event (core_OnCreate) */
+{
+
+  this.eventMode = 'static'
+  this.cursor = 'pointer'
+  this.style = styles.get('ui.text')
+  this.style.fontSize = 100
+  this.style.strokeThickness = 0
+}
+/* 🐱👉 template UI.UndoButton — OnPointerEnter event (core_OnPointerEnter) */
+this.eventMode = 'dynamic';
+this.on('pointerover', () => {
+    
+  
+  tween.add({
+    obj: this.scale,
+    fields: {
+      x: 1.2,
+      y: 1.2,
+    },
+    duration: 150,
+  })
+  tween.add({
+    obj: this,
+    fields: {
+      alpha: 1,
+    },
+    duration: 150,
+  })
+
+});
+/* 🐱👉 template UI.UndoButton — OnPointerLeave event (core_OnPointerLeave) */
+this.eventMode = 'dynamic';
+this.on('pointerout', () => {
+    
+
+  tween.add({
+    obj: this.scale,
+    fields: {
+      x: 1,
+      y: 1,
+    },
+    duration: 150,
+  })
+  tween.add({
+    obj: this,
+    fields: {
+      alpha: 0.5,
+    },
+    duration: 150,
+  })
+
+});
+
+    },
+    extends: {
+    "cgroup": "",
+    "editor:myCollidingCGroups": [],
+    "alpha": 0.5
+}
+};
+templates.list['UI.UndoButton'] = [];
         
     
     
@@ -7241,7 +7404,7 @@ rooms.templates['UI.HUD'] = {
     width: 1080,
     height: 1080,
     behaviors: JSON.parse('[]'),
-    objects: JSON.parse('[{"x":1008,"y":72,"opacity":0.5,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"end","alignY":"start","padding":{"left":0,"top":0,"right":0,"bottom":0}},"customAnchor":{"x":0.5,"y":0.5},"template":"UI.Restart"},{"x":1008,"y":1060,"opacity":0.5,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"end","alignY":"end","padding":{"left":0,"top":0,"right":0,"bottom":0}},"customAnchor":{"x":1,"y":1},"template":"UI.Version"}]'),
+    objects: JSON.parse('[{"x":1008,"y":72,"opacity":0.5,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"customAnchor":{"x":0.5,"y":0.5},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"end","alignY":"start","padding":{"left":0,"top":0,"right":0,"bottom":0}},"template":"UI.Restart"},{"x":1008,"y":1060,"opacity":0.5,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"customAnchor":{"x":1,"y":1},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"end","alignY":"end","padding":{"left":0,"top":0,"right":0,"bottom":0}},"template":"UI.Version"},{"x":864,"y":72,"opacity":0.5,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"customAnchor":{"x":0.5,"y":0.5},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"end","alignY":"start","padding":{"left":0,"top":0,"right":0,"bottom":0}},"template":"UI.UndoButton"}]'),
     bgs: JSON.parse('[]'),
     tiles: JSON.parse('[]'),
     backgroundColor: '#595959',
@@ -11344,6 +11507,8 @@ const ECS = mod(() => {
 
 
 
+
+
 class Main {
   
    __init() {this.eventToSystems = {} }
@@ -11357,6 +11522,7 @@ class Main {
   frameStart() {
     this.phase(
       "onTime",
+      "onInput",
       "onUpdate",
       "onFlaskSelection",
       "onPouring",
@@ -11383,12 +11549,30 @@ class Main {
     this.emit("onAfterStart", config)
   }
 
-  // restartLevel(config: LevelConfig) {
-  //   this.emit()
-  // }
-
   endLevel() {
     this.emit("onEnd")
+  }
+
+  pour(from, to, count) {
+    if (isNaN(count))
+      G.events.w.add({ [EC.TryPour]: { from, to, count: Infinity } })
+    else
+      G.events.w.add({ [EC.Pour]: { from, to, count } })
+  }
+
+  selectFlask(index) {
+
+  }
+
+  undo() {
+    G.events.w.add({ [EC.UndoInput]: true })
+  }
+
+  clickFlask(index) {
+    let clickType = ClickType.Unknown
+    actions.Press.down && (clickType = ClickType.Primary)
+    actions.AltPress.down && (clickType = ClickType.Secondary)
+    G.events.w.add({ [EC.FlaskClicked]: index, [EC.ClickType]: clickType })
   }
 
   //#region Utils
@@ -11447,7 +11631,6 @@ var MC; (function (MC) {
   const IsSelected = 'IsSelected'; MC["IsSelected"] = IsSelected;
 
   const Timer = 'Timer'; MC["Timer"] = Timer;
-  const TimeOut = 'TimeOut'; MC["TimeOut"] = TimeOut;
 })(MC || (MC = {}));
 
 
@@ -11457,6 +11640,12 @@ var MC; (function (MC) {
 
 
 
+class ModelService {constructor() { ModelService.prototype.__init.call(this);ModelService.prototype.__init2.call(this);ModelService.prototype.__init3.call(this);ModelService.prototype.__init4.call(this); }
+  __init() {this.w = createModelWorld()}
+  __init2() {this.board = null}
+  __init3() {this.flasks = []}
+  __init4() {this.history = new PourHistory}
+}
 
 function createModelWorld() {
   return ECS.World.create((w) => {
@@ -11464,13 +11653,12 @@ function createModelWorld() {
       flask = w.with(MC.Flask),
       selectedFlask = flask.with(MC.IsSelected),
       board = w.with(MC.Board),
-      timer = w.with(MC.Timer),
-      timeOut = timer.with(MC.TimeOut)
+      timer = w.with(MC.Timer)
 
     return {
       board,
       flask, selectedFlask,
-      timer,/*  timeOut, */
+      timer,
     }
   })
 }
@@ -11483,10 +11671,10 @@ var BoardState; (function (BoardState) {
 })(BoardState || (BoardState = {}));
 
 class Board {
-  __init() {this.state = BoardState.Generating}
+  __init5() {this.state = BoardState.Generating}
   
-  __init2() {this.selectedFlask = null}
-  constructor( volume,  count,  emptyCount,  colors) {;this.volume = volume;this.count = count;this.emptyCount = emptyCount;this.colors = colors;Board.prototype.__init.call(this);Board.prototype.__init2.call(this); }
+  __init6() {this.selectedFlask = null}
+  constructor( volume,  count,  emptyCount,  colors) {;this.volume = volume;this.count = count;this.emptyCount = emptyCount;this.colors = colors;Board.prototype.__init5.call(this);Board.prototype.__init6.call(this); }
 }
 
 var FlaskState; (function (FlaskState) {
@@ -11503,10 +11691,10 @@ var SelectionState; (function (SelectionState) {
 })(SelectionState || (SelectionState = {}));
 
 class Flask {
-  __init3() {this.state = FlaskState.Empty}
-  __init4() {this.selection = SelectionState.NotSelected}
-  __init5() {this.stack = []}
-  constructor( orderPosition,  volume) {;this.orderPosition = orderPosition;this.volume = volume;Flask.prototype.__init3.call(this);Flask.prototype.__init4.call(this);Flask.prototype.__init5.call(this); }
+  __init7() {this.state = FlaskState.Empty}
+  __init8() {this.selection = SelectionState.NotSelected}
+  __init9() {this.stack = []}
+  constructor( index,  volume) {;this.index = index;this.volume = volume;Flask.prototype.__init7.call(this);Flask.prototype.__init8.call(this);Flask.prototype.__init9.call(this); }
 
   static updateState(flask) {
     const { stack, volume, state } = flask
@@ -11554,9 +11742,20 @@ var LevelMode; (function (LevelMode) {
 
 
 
-class TimeService {constructor() { TimeService.prototype.__init6.call(this); }
-  __init6() {this.total = 0}
+class TimeService {constructor() { TimeService.prototype.__init10.call(this); }
+  __init10() {this.total = 0}
 }
+
+class PourHistory {constructor() { PourHistory.prototype.__init11.call(this); }
+  __init11() {this.undoStack = []}
+}
+
+
+
+
+
+
+
 ;
 
 /* 🐱👉 Project script Events */
@@ -11575,8 +11774,10 @@ var EC; (function (EC) {
   const FlaskUpdated = 'FlaskUpdated'; EC["FlaskUpdated"] = FlaskUpdated;
 
   const TryPour = 'TryPour'; EC["TryPour"] = TryPour;
+  const Pour = 'Pour'; EC["Pour"] = Pour;
   const Poured = 'Poured'; EC["Poured"] = Poured;
   const PourFailed = 'PourFailed'; EC["PourFailed"] = PourFailed;
+  const UndoInput = 'Undo'; EC["UndoInput"] = UndoInput;
 
   const Restart = 'TryRestart'; EC["Restart"] = Restart;
 
@@ -11611,6 +11812,12 @@ var EC; (function (EC) {
 
 
 
+
+
+class EventService {constructor() { EventService.prototype.__init.call(this); }
+  __init() {this.w = createEventWorld()}
+}
+
 const createEventWorld = () => {
   return ECS.World.create((w) => {
     const
@@ -11625,7 +11832,10 @@ const createEventWorld = () => {
       flaskUpdated = w.with(EC.FlaskUpdated),
 
       tryPour = w.with(EC.TryPour),
+      pour = w.with(EC.Pour),
       poured = w.with(EC.Poured),
+      pourFailed = w.with(EC.PourFailed),
+      undoInput = w.with(EC.UndoInput),
 
       restart = w.with(EC.Restart),
 
@@ -11644,7 +11854,10 @@ const createEventWorld = () => {
       flaskUpdated,
 
       tryPour,
+      pour,
       poured,
+      pourFailed,
+      undoInput,
 
       restart,
 
@@ -11662,8 +11875,6 @@ var VC; (function (VC) {
   const Copy = 'Copy'; VC["Copy"] = Copy;
   const Flask = 'Flask'; VC["Flask"] = Flask;
   const IsFlask = 'IsFlask'; VC["IsFlask"] = IsFlask;
-  const IsLiquidContainer = 'IsLiquidContainer'; VC["IsLiquidContainer"] = IsLiquidContainer;
-  const LiquidContainer = 'LiquidContainer'; VC["LiquidContainer"] = LiquidContainer;
   const LiquidLayers = 'LiquidLayes'; VC["LiquidLayers"] = LiquidLayers;
   const LiquidLayer = 'LiquidLayer'; VC["LiquidLayer"] = LiquidLayer;
   const Volume = 'Volume'; VC["Volume"] = Volume;
@@ -11696,24 +11907,31 @@ var VC; (function (VC) {
 
 
 
+
+
+
+
+
+
+
 const createViewWorld = () => {
   return ECS.World.create((w) => {
     const
       liquidLayer = w.with(VC.LiquidLayer),
-      rawFlask = w.with(VC.IsFlask, VC.Volume, VC.ModelID),
-      flask = rawFlask.with(VC.LiquidLayers),
+      flask = w.with(VC.Flask),
       fadedFlask = flask.with(VC.IsFaded),
       copy = w.with(VC.Copy),
       remove = w.with(VC.Remove),
       animation = w.with(VC.Animation, VC.AnimationData), animated = copy.with(VC.AnimationList)
 
-    return { liquidLayer, flask, fadedFlask, rawFlask, remove, copy, animated, animation }
+    return { liquidLayer, flask, fadedFlask, remove, copy, animated, animation }
   })
 }
 
-class ViewService {constructor() { ViewService.prototype.__init.call(this);ViewService.prototype.__init2.call(this); }
+class ViewService {constructor() { ViewService.prototype.__init.call(this);ViewService.prototype.__init2.call(this);ViewService.prototype.__init3.call(this); }
   __init() {this.w = createViewWorld()}
   __init2() {this.board = null }
+  __init3() {this.flasks = []}
 
   animate(target, options) {
     const timer = G.model.w.add({ [MC.Timer]: { duration: options.duration } })
@@ -11916,8 +12134,14 @@ var GameState; (function (GameState) {
 
 
 
-class LevelService {constructor() { LevelService.prototype.__init.call(this); }
+class LevelService {constructor() { LevelService.prototype.__init.call(this);LevelService.prototype.__init2.call(this); }
     __init() {this.board = null}
+    __init2() {this.history = new PourHistory}
+}
+
+class ViewModelService {constructor() { ViewModelService.prototype.__init3.call(this);ViewModelService.prototype.__init4.call(this); }
+    __init3() {this.view = { flasks: []  }}
+    __init4() {this.model = { flasks: []  }}
 }
 ;
 
@@ -11939,13 +12163,8 @@ const G = {
   game: { state: GameState.Launching } ,
   time: new TimeService,
   level: null ,
-  model: {
-    w: createModelWorld(),
-    board: null 
-  },
-  events: {
-    w: createEventWorld(),
-  },
+  model: new ModelService,
+  events: new EventService,
   view: new ViewService,
   hasEvent(eventQuery) {
     return !!G.events.w.queries[eventQuery].size
