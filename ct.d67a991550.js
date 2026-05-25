@@ -5947,7 +5947,8 @@ keyboard.clear();
                 viewEntity[VC.Copy] = copy
                 viewEntity[VC.Flask] = {
                     copy, index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer,
-                    liauidPaddings: { top: 42, bottom: 43, left: 44, right: 44 }
+                    liauidPaddings: { top: 42, bottom: 43, left: 44, right: 44 },
+                    state: FlaskViewState.Unselected
                 }
                 G.view.w.add(viewEntity)
                 container.addChild(copy)
@@ -6191,6 +6192,49 @@ keyboard.clear();
             addTime()
             processTimers()
         }
+    })},'FlaskView.sys': function (options) {
+/* 🐱👉 Script asset FlaskView.sys */
+
+
+    var E; (function (E) { const Update = 0; E[E["Update"] = Update] = "Update"; })(E || (E = {}));
+    
+
+    const context = { state: FlaskViewState.Unselected, entity: null  }
+    const flaskViewFSM = new fsm.HFSM({
+        context,
+        states: {
+            [FlaskViewState.Unselected]: {
+                transitions: [{ event: E.Update, to: FlaskViewState.Solved, condition: isModelSoved, }]
+            },
+            [FlaskViewState.Solved]: {
+                onAfterEnter: [showSolved],
+                onBeforeExit: [hideSolved],
+                transitions: [{ event: E.Update, to: FlaskViewState.Unselected, condition: isNotModelSoved, }]
+            },
+        }
+    })
+
+    function isModelSoved({ entity }) { return G.model.flasks[(entity[VC.Flask].index)][MC.Flask].state === FlaskState.Solved }
+    function isNotModelSoved(c) { return !isModelSoved(c) }
+
+    function showSolved({ entity }) {
+        const { solvedSprite } = entity[VC.Flask].copy
+        tween.add({ obj: solvedSprite, fields: { alpha: 1 }, duration: 300, })
+    }
+    function hideSolved({ entity }) {
+        const { solvedSprite } = entity[VC.Flask].copy
+        tween.add({ obj: solvedSprite, fields: { alpha: 0 }, duration: 150, })
+    }
+
+    return createSystem({
+        onRender() {
+            for (const entity of G.view.w.queries.flask) {
+                context.state = entity[VC.Flask].state
+                context.entity = entity
+                flaskViewFSM.dispatch(E.Update)
+                entity[VC.Flask].state = context.state
+            }
+        }
     })},
   };
 
@@ -6365,7 +6409,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
     deadPool.length = 0;
   }, 1e3 * 60);
   var meta = [
-    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.8"}
+    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.9"}
   ][0];
   var currentViewMode = "scaleFill";
   var currentHighDPIMode = Boolean([
@@ -6571,7 +6615,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
   window.PIXI = PIXI;
   mount();
   
-  let VERSION = "0.0.8";
+  let VERSION = "0.0.9";
 
   {
     const actions = actionsLib;
@@ -6694,7 +6738,7 @@ templates.templates["Flask"] = {
     if (solvedFlask[EC.FlaskSolved] !== this.viewEntity[VC.Flask].index) continue
     // Анимация решённой колбы
     this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
-    tween.add({ obj: this.solvedSprite, fields: { alpha: 1 }, duration: 300, })
+    // tween.add({ obj: this.solvedSprite, fields: { alpha: 1 }, duration: 300, })
     G.view.animate(this.viewEntity, { name: AnimationName.Bounce, duration: 1 })
   }
 
@@ -6728,18 +6772,18 @@ templates.templates["Flask"] = {
   const spriteContainer = new PIXI.Container()
   const liquidContainer = new PIXI.Container()
 
-  const flaskBody = new PIXI.Sprite(res.getTexture('Flask_SF_half')[0])
-  spriteContainer.scale.set(flaskHeight / flaskBody.height)
+  const slicedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_half')[0])
+  spriteContainer.scale.set(flaskHeight / slicedSprite.height)
   const solvedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_full')[0])
   solvedSprite.alpha = 0
   const cm = new PIXI.ColorMatrixFilter
   cm.hue(random.from([0, 22, 180, 335]), false)
   solvedSprite.filters = [cm]
-  flaskBody.filters = [cm]
+  slicedSprite.filters = [cm]
   const alphaSprite = new PIXI.Sprite(res.getTexture('Liquid_container_A')[0])
   alphaSprite.renderable = false
   liquidContainer.mask = alphaSprite
-  spriteContainer.addChild(flaskBody, alphaSprite, liquidContainer, solvedSprite)
+  spriteContainer.addChild(slicedSprite, alphaSprite, liquidContainer, solvedSprite)
 
   flaskContainer.addChild(spriteContainer)
   const fX = flaskContainer.width / 2, fY = flaskContainer.height / 2
@@ -6760,6 +6804,7 @@ templates.templates["Flask"] = {
   this.flaskContainer = flaskContainer
   this.addChild(hitbox, flaskContainer)
   this.solvedSprite = solvedSprite
+  this.slicedSprite = slicedSprite
 
   // Анимация появления
   const alphaFilter = this.alphaFilter = new PIXI.AlphaFilter(0)
@@ -11805,6 +11850,7 @@ var VC; (function (VC) {
 
 
 
+
 const createViewWorld = () => {
   return ECS.World.create((w) => {
     const
@@ -11876,6 +11922,12 @@ var BoardViewState; (function (BoardViewState) {
   const Win = 'Win'; BoardViewState["Win"] = Win;
   const End = 'End'; BoardViewState["End"] = End;
 })(BoardViewState || (BoardViewState = {}));
+
+var FlaskViewState; (function (FlaskViewState) {
+  const Unselected = 'Unselected'; FlaskViewState["Unselected"] = Unselected;
+  const Selected = 'Selected'; FlaskViewState["Selected"] = Selected;
+  const Solved = 'Solved'; FlaskViewState["Solved"] = Solved;
+})(FlaskViewState || (FlaskViewState = {}));
 
 
 
