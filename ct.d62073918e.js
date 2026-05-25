@@ -3451,7 +3451,7 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
         loadingBar.style.width = percents + "%";
       };
       let atlases = [
-        ["./img/a0.{webp,png}.519fbd7144.json"]
+        ["./img/a0.{webp,png}.b7a3b1ed8a.json"]
       ][0];
       let bitmapFonts = [
         []
@@ -4369,8 +4369,7 @@ if (!this.kill) {
        * @catnipIgnore
        */
       afterDraw() {
-        keyboard.clear();
-for (const p of pointer.down) {
+        for (const p of pointer.down) {
     p.xprev = p.x;
     p.yprev = p.y;
     p.xuiprev = p.x;
@@ -4385,6 +4384,7 @@ for (const p of pointer.hover) {
 inputs.registry['pointer.Wheel'] = 0;
 pointer.clearReleased();
 pointer.xmovement = pointer.ymovement = 0;
+keyboard.clear();
 
         if (this.behaviors.length) {
           runBehaviors(this, "rooms", "thisOnDraw");
@@ -5508,7 +5508,7 @@ pointer.xmovement = pointer.ymovement = 0;
         },
 
         onEnd() {
-            utils.clearArray(G.model.history.undoStack)
+            G.model.history.undoStack = []
         }
     })},'flask.yTween': function (options) {
 /* 🐱👉 Script asset flask.yTween */
@@ -5541,9 +5541,6 @@ pointer.xmovement = pointer.ymovement = 0;
     }},'LiquidLayerRender.sys': function (options) {
 /* 🐱👉 Script asset LiquidLayerRender.sys */
 
-    const FLASK_SCALE = 1, MAX_FLASK_WIDTH = 128, MAX_FLASK_HEIGHT = 400
-    const flaskWidth = MAX_FLASK_WIDTH * FLASK_SCALE, flaskHeight = MAX_FLASK_HEIGHT * FLASK_SCALE
-    const PADDING = 20
 
     function drawLiquidLayers(view) {
         const viewData = view[VC.Flask]
@@ -5552,7 +5549,7 @@ pointer.xmovement = pointer.ymovement = 0;
         const model = modelEntity[MC.Flask]
         compareViewAndModel(model)
         syncSpritesWithModel(view)
-        placeSprites(viewData.layers, viewData.volume)
+        placeSprites(viewData.layers, viewData.volume, view)
     }
 
     const modelGroups = []
@@ -5569,8 +5566,9 @@ pointer.xmovement = pointer.ymovement = 0;
 
     const newLayers = []
     // Добавляет и удаляет спрайты
-    function syncSpritesWithModel(flaskView) {
-        const { layers, liquidContainerCopy } = flaskView[VC.Flask]
+    function syncSpritesWithModel(flaskViewEntity) {
+        const flaskView = flaskViewEntity[VC.Flask]
+        const { layers, liquidContainerCopy } = flaskView
         for (let m = 0, v = 0; m < modelGroups.length || v < layers.length;) {
             const layer = G.view.w.entity(layers[v])
             const model = modelGroups[m]
@@ -5586,7 +5584,7 @@ pointer.xmovement = pointer.ymovement = 0;
                     v++
                 }
             } else if (model && !layer) {
-                addLayer(model, liquidContainerCopy)
+                addLayer(model, liquidContainerCopy, flaskViewEntity)
                 m++
             } else if (!model && layer) {
                 removeLayer(layer)
@@ -5600,10 +5598,13 @@ pointer.xmovement = pointer.ymovement = 0;
     }
 
     // Размещает спрайты
-    function placeSprites(layers, flaskVolume) {
+    function placeSprites(layers, flaskVolume, flaskViewEntity) {
         const { w } = G.view
-        let top = flaskHeight - PADDING
-        const minLayerHeight = (flaskHeight - PADDING * 2) / flaskVolume
+        const stats = flaskViewEntity[VC.FlaskViewStats]
+        const { liquidBounds } = stats
+        const height = res.textures[stats.slicedTexture][0].height
+        let top = height - liquidBounds.top
+        const minLayerHeight = (height - liquidBounds.bottom - liquidBounds.top) / flaskVolume
         layers.forEach((id) => {
             const layerEntity = w.entity(id)
             const layer = layerEntity[VC.LiquidLayer]
@@ -5616,6 +5617,7 @@ pointer.xmovement = pointer.ymovement = 0;
                     nextHeight = utils.lerp(nextHeight, targetHeight, u.time ** 0.5, true)
                     if (isCloseEnough(targetHeight, nextHeight)) nextHeight = targetHeight
                     copy.height = nextHeight
+                    copy.pivot.y = nextHeight
                 }
                 if (copy.y !== top) copy.y = top
                 top -= nextHeight
@@ -5628,10 +5630,13 @@ pointer.xmovement = pointer.ymovement = 0;
 
     function isCloseEnough(a, b) { return utils.isClose(a, b, 0.1) }
 
-    function addLayer(model, liquidContainer) {
+    function addLayer(model, liquidContainer, flaskViewEntity) {
+        const stats = flaskViewEntity[VC.FlaskViewStats]
+        const { slicedTexture, liquidBounds } = stats
+        const width = res.textures[slicedTexture][0].width
         const layer = {
-            [VC.Copy]: templates.copy('LiquidLayer', PADDING, 0, {
-                width: flaskWidth - PADDING * 2,
+            [VC.Copy]: templates.copy('LiquidLayer', liquidBounds.left, 0, {
+                width: width - liquidBounds.left - liquidBounds.right,
                 height: 0,
                 tint: theme.liquids[model.type]
             }) ,
@@ -5807,7 +5812,7 @@ pointer.xmovement = pointer.ymovement = 0;
 /* 🐱👉 Script asset BoardView.sys */
 
 
-    const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 128, MAX_FLASK_HEIGHT = 400
+    const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 150, MAX_FLASK_HEIGHT = MAX_FLASK_WIDTH * 2.6
     const
         flaskWidth = MAX_FLASK_WIDTH,
         flaskHeight = MAX_FLASK_HEIGHT,
@@ -5936,9 +5941,14 @@ pointer.xmovement = pointer.ymovement = 0;
                 const x = u.map(col, 0, (cols - 1) || 1, boardLeft, boardRight - flaskWidth)
                 const y = u.map(row, 0, (rows - 1) || 1, boardTop, boardBottom - flaskHeight)
                 const viewEntity = {}
-                const copy = templates.copy('Flask', x, y, { flaskEntity, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity }) 
+                const stats = { slicedTexture: 'Flask_SF_half', fullTexture: 'Flask_SF', liquidBounds: { top: 42, bottom: 43, left: 44, right: 44 } }
+                viewEntity[VC.FlaskViewStats] = stats
+                const copy = templates.copy('Flask', x, y, { flaskEntity, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity, }) 
                 viewEntity[VC.Copy] = copy
-                viewEntity[VC.Flask] = { copy, index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer }
+                viewEntity[VC.Flask] = {
+                    copy, index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer,
+                    liauidPaddings: { top: 42, bottom: 43, left: 44, right: 44 }
+                }
                 G.view.w.add(viewEntity)
                 container.addChild(copy)
                 G.view.flasks[flask.index] = viewEntity
@@ -6355,7 +6365,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
     deadPool.length = 0;
   }, 1e3 * 60);
   var meta = [
-    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.2"}
+    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.8"}
   ][0];
   var currentViewMode = "scaleFill";
   var currentHighDPIMode = Boolean([
@@ -6561,7 +6571,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
   window.PIXI = PIXI;
   mount();
   
-  let VERSION = "0.0.3";
+  let VERSION = "0.0.8";
 
   {
     const actions = actionsLib;
@@ -6684,7 +6694,12 @@ templates.templates["Flask"] = {
     if (solvedFlask[EC.FlaskSolved] !== this.viewEntity[VC.Flask].index) continue
     // Анимация решённой колбы
     this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
+    tween.add({ obj: this.solvedSprite, fields: { alpha: 1 }, duration: 300, })
     G.view.animate(this.viewEntity, { name: AnimationName.Bounce, duration: 1 })
+  }
+
+  if (G.events.w.queries.boardSolved.size) {
+    tween.add({ obj: this.solvedSprite, fields: { alpha: 1 }, duration: 300, })
   }
 
   // this.t += u.time * 10
@@ -6705,33 +6720,44 @@ templates.templates["Flask"] = {
         /* 🐱👉 template Flask — On create event (core_OnCreate) */
 {
 
-  const PADDING = 20
-  const SCALE = 1.9
   const { flaskWidth, flaskHeight, cellWidth, cellHeight } = this
   this.liquids = []
 
   this.eventMode = 'static'
-  const flaskBody = templates.copy('F2')
-  const flaskBG = templates.copy('Flask.BG')
-  flaskBody.scale.set(1 / SCALE)
-  flaskBody.width = flaskWidth * SCALE
-  flaskBody.height = flaskHeight * SCALE
-  flaskBG.scale.set(flaskBody.scale.x)
-  flaskBG.width = flaskBody.width
-  flaskBG.height = flaskBody.height
-
   const flaskContainer = new PIXI.Container()
+  const spriteContainer = new PIXI.Container()
   const liquidContainer = new PIXI.Container()
-  flaskContainer.addChild(flaskBG, liquidContainer, flaskBody)
+
+  const flaskBody = new PIXI.Sprite(res.getTexture('Flask_SF_half')[0])
+  const s = new PIXI.TilingSprite(res.getTexture('FlaskScreen')[0], 400, 400)
+  s.tileScale.x = 0.5
+  spriteContainer.scale.set(flaskHeight / flaskBody.height)
+  const solvedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_full')[0])
+  solvedSprite.alpha = 0
+  const cm = new PIXI.ColorMatrixFilter
+  cm.hue(random.deg(), false)
+  solvedSprite.filters = [cm]
+  flaskBody.filters = [cm]
+  const alphaSprite = new PIXI.Sprite(res.getTexture('Liquid_container_A')[0])
+  alphaSprite.renderable = false
+  const spriteMask = new PIXI.SpriteMaskFilter
+  spriteMask.maskSprite = alphaSprite
+  spriteContainer.addChild(flaskBody, alphaSprite, liquidContainer, solvedSprite/* , s */)
+
+  // liquidContainer.mask = mask
+  flaskContainer.addChild(spriteContainer)
   const fX = flaskContainer.width / 2, fY = flaskContainer.height / 2
   flaskContainer.pivot.set(fX, fY)
   flaskContainer.position.set(fX, fY)
 
   const colorFilter = new PIXI.ColorMatrixFilter
   colorFilter.saturate(0.1, true)
-  colorFilter.brightness(1.1, true)
+  colorFilter.brightness(2, true)
   const fxaa = new PIXI.FXAAFilter
-  liquidContainer.filters = [colorFilter, fxaa]
+  const blurFilter = new PIXI.BlurFilter
+  blurFilter.blurX = 0
+  // colorFilter.blendMode = PIXI.BLEND_MODES.OVERLAY
+  liquidContainer.filters = [fxaa, /* blurFilter, */ spriteMask, colorFilter]
 
   const hitbox = new PIXI.Sprite
   hitbox.width = cellWidth
@@ -6741,6 +6767,8 @@ templates.templates["Flask"] = {
   this.liquidContainer = liquidContainer
   this.flaskContainer = flaskContainer
   this.addChild(hitbox, flaskContainer)
+  this.solvedSprite = solvedSprite
+  const pc = new PIXI.ParticleContainer(100, {})
 
 
   // Анимация появления
@@ -6810,12 +6838,10 @@ templates.templates["LiquidLayer"] = {
     depth: 0,
     blendMode: PIXI.BLEND_MODES.NORMAL,
     visible: true,
-    baseClass: "AnimatedSprite",
+    baseClass: "NineSlicePlane",
     
-            texture: "FlaskScreen",
-        animationFPS: 30,
-        playAnimationOnStart: false,
-        loopAnimation: false,
+            texture: "Liquid_Metal-2",
+        nineSliceSettings: {"top":10,"left":10,"bottom":10,"right":10,"autoUpdate":false},
     behaviors: JSON.parse('[]'),
     onStep: function () {
         
@@ -6827,10 +6853,20 @@ templates.templates["LiquidLayer"] = {
         
     },
     onCreate: function () {
-        
+        /* 🐱👉 template LiquidLayer — On create event (core_OnCreate) */
+{
+
+//   this.blendMode = PIXI.BLEND_MODES.ERASE
+
+//   const particleFilter = new ParticleFilter
+//   this.filters = [particleFilter]
+
+}
+
     },
     extends: {
-    "cgroup": ""
+    "cgroup": "",
+    "editor:myCollidingCGroups": []
 }
 };
 templates.list['LiquidLayer'] = [];
@@ -6868,7 +6904,8 @@ templates.templates["F2"] = {
 
     },
     extends: {
-    "cgroup": ""
+    "cgroup": "",
+    "editor:myCollidingCGroups": []
 }
 };
 templates.list['F2'] = [];
@@ -6933,6 +6970,37 @@ templates.templates["Flask.BG"] = {
 }
 };
 templates.list['Flask.BG'] = [];
+        
+templates.templates["F3"] = {
+    name: "F3",
+    depth: 0,
+    blendMode: PIXI.BLEND_MODES.NORMAL,
+    visible: true,
+    baseClass: "AnimatedSprite",
+    
+            texture: "Flask_SF_half",
+        animationFPS: 30,
+        playAnimationOnStart: false,
+        loopAnimation: true,
+    behaviors: JSON.parse('[]'),
+    onStep: function () {
+        
+    },
+    onDraw: function () {
+        
+    },
+    onDestroy: function () {
+        
+    },
+    onCreate: function () {
+        
+    },
+    extends: {
+    "cgroup": "",
+    "editor:myCollidingCGroups": []
+}
+};
+templates.list['F3'] = [];
         
 templates.templates["Liquid 1"] = {
     name: "Liquid 1",
@@ -11885,7 +11953,10 @@ var VC; (function (VC) {
   const Animation = 'Animation'; VC["Animation"] = Animation;
   const AnimationList = 'AnimationList'; VC["AnimationList"] = AnimationList;
   const AnimationData = 'AnimationState'; VC["AnimationData"] = AnimationData;
+  const FlaskViewStats = 'FlaskViewStats'; VC["FlaskViewStats"] = FlaskViewStats;
 })(VC || (VC = {}));
+
+
 
 
 
@@ -11947,6 +12018,7 @@ class ViewService {constructor() { ViewService.prototype.__init.call(this);ViewS
     target[VC.AnimationList].add(animation.id)
   }
 }
+
 
 
 
@@ -12117,9 +12189,19 @@ const themes = {
             [LiquidType.E]: 0x334A66,
         }
     },
+    metal: {
+        flaskBg: 0x261025,
+        liquids: {
+            [LiquidType.A]: 0xb87333,
+            [LiquidType.B]: 0xFFD700,
+            [LiquidType.C]: 0xCCCCCC,
+            [LiquidType.D]: 0xA6B952,
+            [LiquidType.E]: 0x027EFF,
+        }
+    },
 } 
 
-let theme = themes.fruit_mix
+let theme = themes.metal
 ;
 
 /* 🐱👉 Project script Game */
@@ -12636,6 +12718,70 @@ Object.assign(globalThis, { G });
 
 
 ;
+
+/* 🐱👉 Project script Shaders */
+class SimpleBrightnessFilter extends PIXI.Filter {
+    constructor() {
+        // Вершинный шейдер — используем стандартный из PixiJS
+        const vertexSrc = PIXI.Filter.defaultVertexSrc
+
+        // Фрагментный шейдер — обрабатываем цвет пикселя
+        const fragmentSrc = `
+            precision mediump float;
+
+            varying vec2 vTextureCoord;
+            uniform sampler2D uSampler;
+
+            void main(void) {
+                vec4 color = texture2D(uSampler, vTextureCoord);
+                vec4 smoothedColor = smoothstep(0, 1, color)
+                gl_FragColor = smoothedColor;
+            }
+        `;
+
+        super(vertexSrc, fragmentSrc);
+    }
+}
+
+// Класс фильтра с частицами
+class ParticleFilter extends PIXI.Filter {
+    constructor() {
+        const fragmentShader = `
+  precision highp float;
+  varying vec2 vTextureCoord;
+
+  float random(vec2 st) {
+      return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
+  }
+
+  void main() {
+      float gridSize = 10.0;                // ячеек по UV (всегда 10x10)
+      vec2 gridCoord = vTextureCoord * gridSize;
+      vec2 cell = floor(gridCoord);
+      vec2 localUV = fract(gridCoord);
+
+      vec2 offset = vec2(random(cell), random(cell + 17.0));
+      float dist = length(localUV - offset);
+      float radius = 0.08 + random(cell + 34.0) * 0.12; // радиус в UV-единицах
+
+      float alpha = 1.0 - smoothstep(radius * 0.7, radius, dist);
+
+      float brightness = 0.6 + random(cell + 51.0) * 0.4;
+      vec3 color = vec3(0.7, 0.85, 1.0) * brightness;
+
+      vec3 bg = vec3(0.05, 0.06, 0.15);
+      vec3 finalColor = mix(bg, color, alpha);
+
+      gl_FragColor = vec4(finalColor, 1.0);
+  }
+`;
+        super(null, fragmentShader, {
+            uResolution: [pixiApp.screen.width, pixiApp.screen.height],
+        });
+        this.resolution = pixiApp.renderer.resolution
+        this.autoFit = false
+    }
+};
 
   
   
