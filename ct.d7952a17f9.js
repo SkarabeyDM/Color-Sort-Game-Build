@@ -3451,7 +3451,7 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
         loadingBar.style.width = percents + "%";
       };
       let atlases = [
-        ["./img/a0.{webp,png}.b7a3b1ed8a.json"]
+        ["./img/a0.{webp,png}.7eb006e2f9.json"]
       ][0];
       let bitmapFonts = [
         []
@@ -6729,22 +6729,18 @@ templates.templates["Flask"] = {
   const liquidContainer = new PIXI.Container()
 
   const flaskBody = new PIXI.Sprite(res.getTexture('Flask_SF_half')[0])
-  const s = new PIXI.TilingSprite(res.getTexture('FlaskScreen')[0], 400, 400)
-  s.tileScale.x = 0.5
   spriteContainer.scale.set(flaskHeight / flaskBody.height)
   const solvedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_full')[0])
   solvedSprite.alpha = 0
   const cm = new PIXI.ColorMatrixFilter
-  cm.hue(random.deg(), false)
+  cm.hue(random.from([0, 22, 180, 335]), false)
   solvedSprite.filters = [cm]
   flaskBody.filters = [cm]
   const alphaSprite = new PIXI.Sprite(res.getTexture('Liquid_container_A')[0])
   alphaSprite.renderable = false
-  const spriteMask = new PIXI.SpriteMaskFilter
-  spriteMask.maskSprite = alphaSprite
-  spriteContainer.addChild(flaskBody, alphaSprite, liquidContainer, solvedSprite/* , s */)
+  liquidContainer.mask = alphaSprite
+  spriteContainer.addChild(flaskBody, alphaSprite, liquidContainer, solvedSprite)
 
-  // liquidContainer.mask = mask
   flaskContainer.addChild(spriteContainer)
   const fX = flaskContainer.width / 2, fY = flaskContainer.height / 2
   flaskContainer.pivot.set(fX, fY)
@@ -6753,11 +6749,7 @@ templates.templates["Flask"] = {
   const colorFilter = new PIXI.ColorMatrixFilter
   colorFilter.saturate(0.1, true)
   colorFilter.brightness(2, true)
-  const fxaa = new PIXI.FXAAFilter
-  const blurFilter = new PIXI.BlurFilter
-  blurFilter.blurX = 0
-  // colorFilter.blendMode = PIXI.BLEND_MODES.OVERLAY
-  liquidContainer.filters = [fxaa, /* blurFilter, */ spriteMask, colorFilter]
+  liquidContainer.filters = [colorFilter]
 
   const hitbox = new PIXI.Sprite
   hitbox.width = cellWidth
@@ -6768,8 +6760,6 @@ templates.templates["Flask"] = {
   this.flaskContainer = flaskContainer
   this.addChild(hitbox, flaskContainer)
   this.solvedSprite = solvedSprite
-  const pc = new PIXI.ParticleContainer(100, {})
-
 
   // Анимация появления
   const alphaFilter = this.alphaFilter = new PIXI.AlphaFilter(0)
@@ -6840,7 +6830,7 @@ templates.templates["LiquidLayer"] = {
     visible: true,
     baseClass: "NineSlicePlane",
     
-            texture: "Liquid_Metal-2",
+            texture: "Liquid_Metal",
         nineSliceSettings: {"top":10,"left":10,"bottom":10,"right":10,"autoUpdate":false},
     behaviors: JSON.parse('[]'),
     onStep: function () {
@@ -6853,16 +6843,7 @@ templates.templates["LiquidLayer"] = {
         
     },
     onCreate: function () {
-        /* 🐱👉 template LiquidLayer — On create event (core_OnCreate) */
-{
-
-//   this.blendMode = PIXI.BLEND_MODES.ERASE
-
-//   const particleFilter = new ParticleFilter
-//   this.filters = [particleFilter]
-
-}
-
+        
     },
     extends: {
     "cgroup": "",
@@ -6870,45 +6851,6 @@ templates.templates["LiquidLayer"] = {
 }
 };
 templates.list['LiquidLayer'] = [];
-        
-templates.templates["F2"] = {
-    name: "F2",
-    depth: 0,
-    blendMode: PIXI.BLEND_MODES.NORMAL,
-    visible: true,
-    baseClass: "NineSlicePlane",
-    
-            texture: "Flask",
-        nineSliceSettings: {"top":73,"left":73,"bottom":73,"right":73,"autoUpdate":true},
-    behaviors: JSON.parse('[]'),
-    onStep: function () {
-        
-    },
-    onDraw: function () {
-        
-    },
-    onDestroy: function () {
-        
-    },
-    onCreate: function () {
-        /* 🐱👉 template F2 — On create event (core_OnCreate) */
-{
-
-    this.tex = random.dice(
-        'Flask',
-        // 'Flask-Coper',
-        // 'Flask-Gold',
-        'Flask-Silver',
-    )
-}
-
-    },
-    extends: {
-    "cgroup": "",
-    "editor:myCollidingCGroups": []
-}
-};
-templates.list['F2'] = [];
         
 templates.templates["Board"] = {
     name: "Board",
@@ -6943,34 +6885,6 @@ templates.templates["Board"] = {
 };
 templates.list['Board'] = [];
         
-templates.templates["Flask.BG"] = {
-    name: "Flask.BG",
-    depth: 0,
-    blendMode: PIXI.BLEND_MODES.NORMAL,
-    visible: true,
-    baseClass: "NineSlicePlane",
-    
-            texture: "Flask_bg",
-        nineSliceSettings: {"top":73,"left":73,"bottom":73,"right":73,"autoUpdate":false},
-    behaviors: JSON.parse('[]'),
-    onStep: function () {
-        
-    },
-    onDraw: function () {
-        
-    },
-    onDestroy: function () {
-        
-    },
-    onCreate: function () {
-        
-    },
-    extends: {
-    "cgroup": ""
-}
-};
-templates.list['Flask.BG'] = [];
-        
 templates.templates["F3"] = {
     name: "F3",
     depth: 0,
@@ -7001,70 +6915,6 @@ templates.templates["F3"] = {
 }
 };
 templates.list['F3'] = [];
-        
-templates.templates["Liquid 1"] = {
-    name: "Liquid 1",
-    depth: 0,
-    blendMode: PIXI.BLEND_MODES.NORMAL,
-    visible: true,
-    baseClass: "NineSlicePlane",
-    
-            texture: "FlaskLiquid_red",
-        nineSliceSettings: {"top":105,"left":105,"bottom":105,"right":105,"autoUpdate":false},
-    behaviors: JSON.parse('[]'),
-    onStep: function () {
-        
-    },
-    onDraw: function () {
-        
-    },
-    onDestroy: function () {
-        
-    },
-    onCreate: function () {
-        /* 🐱👉 template Liquid 1 — On create event (core_OnCreate) */
-{
-const colorFilter = new PIXI.ColorMatrixFilter
-colorFilter.saturate(1.5, true)
-colorFilter.hue(random.deg(), true)
-
-this.filters = [colorFilter]
-}
-
-    },
-    extends: {
-    "cgroup": ""
-}
-};
-templates.list['Liquid 1'] = [];
-        
-templates.templates["Flask 1"] = {
-    name: "Flask 1",
-    depth: 0,
-    blendMode: PIXI.BLEND_MODES.NORMAL,
-    visible: true,
-    baseClass: "NineSlicePlane",
-    
-            texture: "Flask-Silver",
-        nineSliceSettings: {"top":105,"left":105,"bottom":105,"right":105,"autoUpdate":false},
-    behaviors: JSON.parse('[]'),
-    onStep: function () {
-        
-    },
-    onDraw: function () {
-        
-    },
-    onDestroy: function () {
-        
-    },
-    onCreate: function () {
-        
-    },
-    extends: {
-    "cgroup": ""
-}
-};
-templates.list['Flask 1'] = [];
         
 templates.templates["UI.Restart"] = {
     name: "UI.Restart",
@@ -7428,36 +7278,6 @@ rooms.templates['Game'] = {
     rooms.prepend('UI.PauseMenu')
 }
 
-    },
-    isUi: false,
-    follow: false,
-    extends: {},
-    bindings: {
-    
-    }
-}
-        
-rooms.templates['Test.Liquid'] = {
-    name: 'Test.Liquid',
-    width: 1280,
-    height: 720,
-    behaviors: JSON.parse('[]'),
-    objects: JSON.parse('[{"x":0,"y":0,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":256,"y":0,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":512,"y":0,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":768,"y":0,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":1024,"y":0,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":1024,"y":224,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":768,"y":224,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":512,"y":224,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":256,"y":224,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":0,"y":384,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1.25},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":0,"y":192,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1.085},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":512,"y":448,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":768,"y":448,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":1024,"y":448,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"template":"Liquid 1"},{"x":0,"y":0,"opacity":1,"tint":16777215,"scale":{"x":1,"y":2.75},"rotation":0,"exts":{},"customProperties":{},"template":"Flask 1"}]'),
-    bgs: JSON.parse('[]'),
-    tiles: JSON.parse('[]'),
-    backgroundColor: '#000000',
-    
-    onStep() {
-        
-    },
-    onDraw() {
-        
-    },
-    onLeave() {
-        
-    },
-    onCreate() {
-        
     },
     isUi: false,
     follow: false,
