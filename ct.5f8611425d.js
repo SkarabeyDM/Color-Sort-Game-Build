@@ -5538,7 +5538,76 @@ keyboard.clear();
             silent: true,
             ...options
         })
-    }},'LiquidLayerRender.sys': function (options) {
+    }},'FlaskView.sys': function (options) {
+/* 🐱👉 Script asset FlaskView.sys */
+
+
+    var E; (function (E) { const Update = 0; E[E["Update"] = Update] = "Update"; })(E || (E = {}));
+    
+
+    const context = { state: FlaskViewState.Unselected, entity: null  }
+    const flaskViewFSM = new fsm.HFSM({
+        context,
+        states: {
+            [FlaskViewState.Unselected]: {
+                transitions: [
+                    { event: E.Update, to: FlaskViewState.Solved, condition: isModelSoved, },
+                    { event: E.Update, to: FlaskViewState.Selected, condition: isSelected, },
+                ]
+            },
+            [FlaskViewState.Selected]: {
+                onAfterEnter: [select],
+                onAfterExit: [deselect],
+                transitions: [{ event: E.Update, to: FlaskViewState.Unselected, condition: isNotSelected }]
+            },
+            [FlaskViewState.Solved]: {
+                onAfterEnter: [showSolved, bounce],
+                onBeforeExit: [hideSolved],
+                transitions: [{ event: E.Update, to: FlaskViewState.Unselected, condition: isNotModelSoved, }]
+            },
+        }
+    })
+
+    // Conditions
+    function isModelSoved({ entity }) { return G.model.flasks[(entity[VC.Flask].index)][MC.Flask].state === FlaskState.Solved }
+    function isNotModelSoved(c) { return !isModelSoved(c) }
+    function isSelected({ entity }) { return G.model.flasks[(entity[VC.Flask].index)][MC.Flask].selection === SelectionState.Selected }
+    function isNotSelected(c) { return !isSelected(c) }
+
+    // Actions
+    function showSolved({ entity }) {
+        const { solvedSprite } = entity[VC.Copy]
+        tween.add({ obj: solvedSprite, fields: { alpha: 1 }, duration: 300, })
+    }
+    function bounce({ entity }) {
+        G.view.animate(entity, { name: AnimationName.Bounce, duration: 1 })
+    }
+    function hideSolved({ entity }) {
+        const { solvedSprite } = entity[VC.Copy]
+        tween.add({ obj: solvedSprite, fields: { alpha: 0 }, duration: 150, })
+    }
+    function deselect(c) {
+        const copy = c.entity[VC.Copy]
+        copy.yTween(0)
+        copy.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
+    }
+    function select(c) {
+        const copy = c.entity[VC.Copy]
+        copy.yTween(-64)
+        copy.scaleTween(1.05, { curve: tween.easeInQuad, duration: 150 })
+    }
+
+
+    return createSystem({
+        onRender() {
+            for (const entity of G.view.w.queries.flask) {
+                context.state = entity[VC.Flask].state
+                context.entity = entity
+                flaskViewFSM.dispatch(E.Update)
+                entity[VC.Flask].state = context.state
+            }
+        }
+    })},'LiquidLayerRender.sys': function (options) {
 /* 🐱👉 Script asset LiquidLayerRender.sys */
 
 
@@ -5940,13 +6009,13 @@ keyboard.clear();
                 const col = i - row * cols
                 const x = u.map(col, 0, (cols - 1) || 1, boardLeft, boardRight - flaskWidth)
                 const y = u.map(row, 0, (rows - 1) || 1, boardTop, boardBottom - flaskHeight)
-                const viewEntity = {}
+                const viewEntity = { [VC.Position]: { x: 0, y: 0 } }
                 const stats = { slicedTexture: 'Flask_SF_half', fullTexture: 'Flask_SF', liquidBounds: { top: 42, bottom: 43, left: 44, right: 44 } }
                 viewEntity[VC.FlaskViewStats] = stats
-                const copy = templates.copy('Flask', x, y, { flaskEntity, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity, }) 
+                const copy = templates.copy('Flask', 0, 0, { flaskEntity, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity, }) 
                 viewEntity[VC.Copy] = copy
                 viewEntity[VC.Flask] = {
-                    copy, index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer,
+                    index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer,
                     liauidPaddings: { top: 42, bottom: 43, left: 44, right: 44 },
                     state: FlaskViewState.Unselected
                 }
@@ -6034,10 +6103,13 @@ keyboard.clear();
 
     function applyFields(viewEntity) {
         const copy = viewEntity[VC.Copy]
+        const position = viewEntity[VC.Position]
 
         copy.angle = FIELD_BUFFER.angle
-        copy.x = copy.xstart + FIELD_BUFFER.position.x
-        copy.y = copy.ystart + FIELD_BUFFER.position.y
+        if (position) {
+            copy.x +=  FIELD_BUFFER.position.x
+            copy.y +=  FIELD_BUFFER.position.y
+        }
         copy.scale.x = FIELD_BUFFER.scale.x
         copy.scale.y = FIELD_BUFFER.scale.y
     }
@@ -6052,6 +6124,7 @@ keyboard.clear();
     }
 
     return createSystem({
+        PRIORITY: Priority.Low,
         onRender() {
             for (const animation of G.view.w.queries.animation) {
                 animationFSM.context = animation[VC.AnimationData]
@@ -6192,47 +6265,101 @@ keyboard.clear();
             addTime()
             processTimers()
         }
-    })},'FlaskView.sys': function (options) {
-/* 🐱👉 Script asset FlaskView.sys */
+    })},'FlaskPositioning.sys': function (options) {
+/* 🐱👉 Script asset FlaskPositioning.sys */
 
 
-    var E; (function (E) { const Update = 0; E[E["Update"] = Update] = "Update"; })(E || (E = {}));
-    
+    const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 150, MAX_FLASK_HEIGHT = MAX_FLASK_WIDTH * 2.6
+    const MARGIN = 25
 
-    const context = { state: FlaskViewState.Unselected, entity: null  }
-    const flaskViewFSM = new fsm.HFSM({
-        context,
-        states: {
-            [FlaskViewState.Unselected]: {
-                transitions: [{ event: E.Update, to: FlaskViewState.Solved, condition: isModelSoved, }]
-            },
-            [FlaskViewState.Solved]: {
-                onAfterEnter: [showSolved],
-                onBeforeExit: [hideSolved],
-                transitions: [{ event: E.Update, to: FlaskViewState.Unselected, condition: isNotModelSoved, }]
-            },
-        }
-    })
+    const flasks = []
+    const positions = []
+    const grid = { rows: 0, cols: 0, width: 0, height: 0 }
 
-    function isModelSoved({ entity }) { return G.model.flasks[(entity[VC.Flask].index)][MC.Flask].state === FlaskState.Solved }
-    function isNotModelSoved(c) { return !isModelSoved(c) }
-
-    function showSolved({ entity }) {
-        const { solvedSprite } = entity[VC.Flask].copy
-        tween.add({ obj: solvedSprite, fields: { alpha: 1 }, duration: 300, })
+    function getBoardContainer() { return templates.list.Board[0] }
+    function getFlasks() {
+        utils.clearArray(flasks)
+        G.view.flasks.forEach((flask) => flasks.push(flask))
+        return flasks
     }
-    function hideSolved({ entity }) {
-        const { solvedSprite } = entity[VC.Flask].copy
-        tween.add({ obj: solvedSprite, fields: { alpha: 0 }, duration: 150, })
+    function calculatePositions() {
+        const { width: cameraWidth, height: cameraHeight } = camera
+        const grid = findGrid(cameraHeight - MARGIN, cameraWidth - MARGIN, MAX_FLASK_WIDTH, MAX_FLASK_HEIGHT, flasks.length)
+        const xOffset = grid.width / 2
+        const yOffset = grid.height / 2
+
+        for (let i = 0, col = 0, row = 0; i < flasks.length; i++) {
+
+            positions.push({ x: u.map(col, 0, grid.cols, -xOffset, xOffset), y: u.map(row, 0, grid.rows, -yOffset, yOffset) })
+
+            col++
+            if (col === grid.cols) col = 0, row++
+        }
+        // console.log(grid)
+    }
+    function applyPositions() {
+        flasks.forEach((flask, i) => {
+            const position = positions[i]
+            flask[VC.Position].x = position.x
+            flask[VC.Position].y = position.y
+        })
+        utils.clearArray(positions)
+    }
+
+    function findGrid(vLimit, hLimit, flaskWidth, flaskHeight, flaskCount) {
+        let line = 1
+
+        while (line <= flaskCount) {
+            const altLineCount = Math.ceil(flaskCount / line)
+            const widthA = line * flaskWidth + H_GAP * (line - 1)
+            const heightA = altLineCount * flaskHeight + V_GAP * (altLineCount - 1)
+            const widthB = altLineCount * flaskWidth + H_GAP * (altLineCount - 1)
+            const heightB = line * flaskHeight + V_GAP * (line - 1)
+
+            if (widthA < hLimit && heightA < vLimit) {
+                // Длинный вариант
+                return setGrid(line, altLineCount, widthA, heightA)
+            }
+            if (heightB < vLimit && widthB < hLimit) {
+                // Компактный вариант
+                return setGrid(altLineCount, line, widthB, heightB)
+            }
+
+            line++
+        }
+
+        // console.log('grid not found')
+        return grid
+    }
+
+    function setGrid(cols, rows, width, height) {
+        grid.cols = cols
+        grid.rows = rows
+        grid.width = width
+        grid.height = height
+        return grid
     }
 
     return createSystem({
+        onPreRender() {
+            const board = getBoardContainer()
+            getFlasks()
+            if (!board || !flasks.length) return
+            calculatePositions()
+            applyPositions()
+        }
+    })},'ViewPosition.sys': function (options) {
+/* 🐱👉 Script asset ViewPosition.sys */
+
+
+    return createSystem({
         onRender() {
-            for (const entity of G.view.w.queries.flask) {
-                context.state = entity[VC.Flask].state
-                context.entity = entity
-                flaskViewFSM.dispatch(E.Update)
-                entity[VC.Flask].state = context.state
+            for (const entity of G.view.w.queries.position) {
+                const copy = entity[VC.Copy]
+                const position = entity[VC.Position]
+                if (!copy || !position) continue
+                copy.x = position.x
+                copy.y = position.y
             }
         }
     })},
@@ -6409,7 +6536,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
     deadPool.length = 0;
   }, 1e3 * 60);
   var meta = [
-    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.0.9"}
+    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.1.0"}
   ][0];
   var currentViewMode = "scaleFill";
   var currentHighDPIMode = Boolean([
@@ -6615,7 +6742,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
   window.PIXI = PIXI;
   mount();
   
-  let VERSION = "0.0.9";
+  let VERSION = "0.1.0";
 
   {
     const actions = actionsLib;
@@ -6709,14 +6836,14 @@ templates.templates["Flask"] = {
 
     if (EC.FlaskDeselected in event) {
       // Анимация отпускания
-      this.yTween(0)
-      this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
+      // this.yTween(0)
+      // this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
     }
 
     if (EC.FlaskSelected in event) {
       // Анимация подбирания
-      this.yTween(-64)
-      this.scaleTween(1.05, { curve: tween.easeInQuad, duration: 150 })
+      // this.yTween(-64)
+      // this.scaleTween(1.05, { curve: tween.easeInQuad, duration: 150 })
     }
 
     if (EC.PourFailed in event || EC.FlaskSelectionFailed in event) {
@@ -6737,9 +6864,9 @@ templates.templates["Flask"] = {
   for (const solvedFlask of G.events.w.queries.flaskSolved) {
     if (solvedFlask[EC.FlaskSolved] !== this.viewEntity[VC.Flask].index) continue
     // Анимация решённой колбы
-    this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
+    // this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
     // tween.add({ obj: this.solvedSprite, fields: { alpha: 1 }, duration: 300, })
-    G.view.animate(this.viewEntity, { name: AnimationName.Bounce, duration: 1 })
+    // G.view.animate(this.viewEntity, { name: AnimationName.Bounce, duration: 1 })
   }
 
   if (G.events.w.queries.boardSolved.size) {
@@ -6902,10 +7029,8 @@ templates.templates["Board"] = {
     depth: 0,
     blendMode: PIXI.BLEND_MODES.NORMAL,
     visible: true,
-    baseClass: "NineSlicePlane",
+    baseClass: "Container",
     
-            texture: "transparent",
-        nineSliceSettings: {"top":1,"left":1,"bottom":1,"right":1,"autoUpdate":false},
     behaviors: JSON.parse('[]'),
     onStep: function () {
         
@@ -6925,7 +7050,8 @@ templates.templates["Board"] = {
 
     },
     extends: {
-    "cgroup": ""
+    "cgroup": "",
+    "editor:myCollidingCGroups": []
 }
 };
 templates.list['Board'] = [];
@@ -7269,7 +7395,7 @@ rooms.templates['Level'] = {
     width: 1080,
     height: 1080,
     behaviors: JSON.parse('[]'),
-    objects: JSON.parse('[{"x":0,"y":0,"opacity":1,"tint":16777215,"scale":{"x":1080,"y":1080},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":5,"y1":5,"x2":95,"y2":95},"alignX":"center","alignY":"center","padding":{"left":0,"top":0,"right":0,"bottom":0}},"template":"Board"}]'),
+    objects: JSON.parse('[{"x":540,"y":540,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"center","alignY":"center","padding":{"left":0,"top":0,"right":0,"bottom":0}},"template":"Board"},{"x":540,"y":540,"opacity":1,"tint":16777215,"scale":{"x":1,"y":1},"rotation":0,"exts":{},"customProperties":{},"align":{"frame":{"x1":0,"y1":0,"x2":100,"y2":100},"alignX":"center","alignY":"center","padding":{"left":0,"top":0,"right":0,"bottom":0}},"template":"Board"}]'),
     bgs: JSON.parse('[]'),
     tiles: JSON.parse('[]'),
     backgroundColor: '#141B25',
@@ -11819,6 +11945,7 @@ var VC; (function (VC) {
   const AnimationList = 'AnimationList'; VC["AnimationList"] = AnimationList;
   const AnimationData = 'AnimationState'; VC["AnimationData"] = AnimationData;
   const FlaskViewStats = 'FlaskViewStats'; VC["FlaskViewStats"] = FlaskViewStats;
+  const Position = 'Position'; VC["Position"] = Position;
 })(VC || (VC = {}));
 
 
@@ -11859,9 +11986,10 @@ const createViewWorld = () => {
       fadedFlask = flask.with(VC.IsFaded),
       copy = w.with(VC.Copy),
       remove = w.with(VC.Remove),
-      animation = w.with(VC.Animation, VC.AnimationData), animated = copy.with(VC.AnimationList)
+      animation = w.with(VC.Animation, VC.AnimationData), animated = copy.with(VC.AnimationList),
+      position = w.with(VC.Position)
 
-    return { liquidLayer, flask, fadedFlask, remove, copy, animated, animation }
+    return { liquidLayer, flask, fadedFlask, remove, copy, animated, animation, position, }
   })
 }
 
