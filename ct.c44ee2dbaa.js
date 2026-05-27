@@ -4303,7 +4303,13 @@ if (!this.kill) {
        * @catnipIgnore
        */
       beforeStep() {
-        {
+        pointer.updateGestures();
+{
+    const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
+    pointer.x = positionGame.x;
+    pointer.y = positionGame.y;
+}
+{
     let i = 0;
     while (i < tween.tweens.length) {
         const twoon = tween.tweens[i];
@@ -4339,12 +4345,6 @@ if (!this.kill) {
         i++;
     }
 }
-pointer.updateGestures();
-{
-    const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
-    pointer.x = positionGame.x;
-    pointer.y = positionGame.y;
-}
 
       },
       /**
@@ -4369,7 +4369,8 @@ pointer.updateGestures();
        * @catnipIgnore
        */
       afterDraw() {
-        for (const p of pointer.down) {
+        keyboard.clear();
+for (const p of pointer.down) {
     p.xprev = p.x;
     p.yprev = p.y;
     p.xuiprev = p.x;
@@ -4384,7 +4385,6 @@ for (const p of pointer.hover) {
 inputs.registry['pointer.Wheel'] = 0;
 pointer.clearReleased();
 pointer.xmovement = pointer.ymovement = 0;
-keyboard.clear();
 
         if (this.behaviors.length) {
           runBehaviors(this, "rooms", "thisOnDraw");
@@ -5612,8 +5612,7 @@ keyboard.clear();
 
 
     const BASE_FLASK_WIDTH = 194, BASE_FLASK_HEIGHT = 508, BASE_CELL_WIDTH = BASE_FLASK_WIDTH * 1.22, BASE_CELL_HEIGHT = BASE_FLASK_HEIGHT * 1.17
-    const FLASK_ASPECT_RATIO = BASE_FLASK_WIDTH / BASE_FLASK_HEIGHT, CELL_ASPECT_RATIO = BASE_CELL_WIDTH / BASE_CELL_HEIGHT
-    const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 150, MAX_FLASK_HEIGHT = MAX_FLASK_WIDTH * 2.6
+    const CELL_ASPECT_RATIO = BASE_CELL_WIDTH / BASE_CELL_HEIGHT
     const M = { left: 25, right: 25, bottom: 25, top: 75 }
 
     const flasks = []
@@ -5654,29 +5653,8 @@ keyboard.clear();
     }
 
     function findGrid(vLimit, hLimit, flaskCount) {
-        // let line = 1
-
-        // while (line <= flaskCount) {
-        //     const altLineCount = Math.ceil(flaskCount / line)
-        //     const widthA = line * flaskWidth + H_GAP * (line - 1)
-        //     const heightA = altLineCount * flaskHeight + V_GAP * (altLineCount - 1)
-        //     const widthB = altLineCount * flaskWidth + H_GAP * (altLineCount - 1)
-        //     const heightB = line * flaskHeight + V_GAP * (line - 1)
-
-        //     if (widthA < hLimit && heightA < vLimit) {
-        //         // Длинный вариант
-        //         return setGrid(line, altLineCount, widthA, heightA)
-        //     }
-        //     if (heightB < vLimit && widthB < hLimit) {
-        //         // Компактный вариант
-        //         return setGrid(altLineCount, line, widthB, heightB)
-        //     }
-
-        //     line++
-        // }
-
         let maxCellWidth = 0
-        for (let i = 1; i < flaskCount; i++) {
+        for (let i = 1; i <= flaskCount; i++) {
             const cols = i, rows = Math.ceil(flaskCount / cols)
             let matrixWidth = hLimit
             let cellWidth = hLimit / cols
@@ -5696,7 +5674,7 @@ keyboard.clear();
                 grid.width = matrixWidth
                 grid.height = matrixHeight
                 grid.cellScale = cellWidth / BASE_CELL_WIDTH
-            } /* else if (cellWidth < maxCellWidth) break */
+            }
         }
 
         return grid
@@ -5992,13 +5970,6 @@ keyboard.clear();
 /* 🐱👉 Script asset BoardView.sys */
 
 
-    const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 150, MAX_FLASK_HEIGHT = MAX_FLASK_WIDTH * 2.6
-    const
-        flaskWidth = MAX_FLASK_WIDTH,
-        flaskHeight = MAX_FLASK_HEIGHT,
-        cellWidth = flaskWidth + H_GAP,
-        cellHeight = flaskHeight + V_GAP
-
     var BoardViewEvent; (function (BoardViewEvent) {
         const UPDATE = 'UPDATE'; BoardViewEvent["UPDATE"] = UPDATE;
         const FADE_OUT = 'FADE_OUT'; BoardViewEvent["FADE_OUT"] = FADE_OUT;
@@ -6094,32 +6065,17 @@ keyboard.clear();
         rooms.prepend('Level')
         const board = G.main.getBoard()[MC.Board]
         const container = getBoardContainer()
-        const
-            boardWidth = container.width,
-            boardHeight = container.height
-        const topLeft = { x: 0, y: 0 }, bottomRight = container.position.clone().set(container.width, container.height)
-        const count = G.model.w.queries.flask.size
-        const rows = Math.ceil(((flaskWidth + H_GAP) * count - H_GAP) / boardWidth)
-        const cols = Math.ceil(count / rows) || 1
-        const colHeight = rows * flaskHeight + V_GAP * (rows - 1),
-            boardVSpace = boardHeight - colHeight,
-            boardTop = topLeft.y + boardVSpace / 2,
-            boardBottom = bottomRight.y - boardVSpace / 2
-        const rowWidth = cols * flaskWidth + H_GAP * (cols - 1),
-            boardHSpace = boardWidth - rowWidth,
-            boardLeft = topLeft.y + boardHSpace / 2,
-            boardRight = bottomRight.y - boardHSpace / 2
 
         for (const flaskEntity of G.model.w.queries.flask) {
             const flask = flaskEntity[MC.Flask]
             const i = flask.index
             const t = u.map(i, 0, board.count - 1, 0, 1)
-            const delay = Math.max(1, t * 1000)
+            const delay = Math.max(1, t * 1)
             timer.add(delay).then(() => {
                 const viewEntity = { [VC.Position]: { x: 0, y: 0 }, [VC.Scale]: { x: 1, y: 1 } }
                 const stats = { slicedTexture: 'Flask_SF_half', fullTexture: 'Flask_SF', liquidBounds: { top: 42, bottom: 43, left: 44, right: 44 } }
                 viewEntity[VC.FlaskViewStats] = stats
-                const copy = templates.copy('Flask', 0, 0, { flaskEntity, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity, }) 
+                const copy = templates.copy('Flask', 0, 0, { flaskEntity, viewEntity }) 
                 viewEntity[VC.Copy] = copy
                 viewEntity[VC.Flask] = {
                     index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer,
@@ -6215,6 +6171,10 @@ keyboard.clear();
 
         copy.angle = FIELD_BUFFER.angle
         if (position) {
+            if (scale) {
+                FIELD_BUFFER.position.x *= scale.x
+                FIELD_BUFFER.position.y *= scale.y
+            }
             copy.x += FIELD_BUFFER.position.x
             copy.y += FIELD_BUFFER.position.y
         }
@@ -6931,7 +6891,6 @@ templates.templates["Flask"] = {
         /* 🐱👉 template Flask — On create event (core_OnCreate) */
 {
 
-  const { flaskWidth, flaskHeight, cellWidth, cellHeight } = this
   this.liquids = []
 
   this.eventMode = 'static'
@@ -6940,7 +6899,6 @@ templates.templates["Flask"] = {
   const liquidContainer = new PIXI.Container()
 
   const slicedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_half')[0])
-  // spriteContainer.scale.set(flaskHeight / slicedSprite.height)
   const solvedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_full')[0])
   solvedSprite.alpha = 0
   const cm = new PIXI.ColorMatrixFilter
@@ -6967,7 +6925,6 @@ templates.templates["Flask"] = {
   hitbox.width = slicedSprite.width * 1.22
   hitbox.height = slicedSprite.height * 1.17
   hitbox.position.set(-(hitbox.width - slicedSprite.width) / 2, -(hitbox.height - slicedSprite.height) / 2)
-  // hitbox.pivot.set(hitbox.width / 2, hitbox.height / 2)
 
   this.liquidContainer = liquidContainer
   this.flaskContainer = flaskContainer 
@@ -11991,8 +11948,6 @@ var VC; (function (VC) {
   const Position = 'Position'; VC["Position"] = Position;
   const Scale = 'Scale'; VC["Scale"] = Scale;
 })(VC || (VC = {}));
-
-
 
 
 
