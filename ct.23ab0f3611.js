@@ -4303,13 +4303,7 @@ if (!this.kill) {
        * @catnipIgnore
        */
       beforeStep() {
-        pointer.updateGestures();
-{
-    const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
-    pointer.x = positionGame.x;
-    pointer.y = positionGame.y;
-}
-{
+        {
     let i = 0;
     while (i < tween.tweens.length) {
         const twoon = tween.tweens[i];
@@ -4344,6 +4338,12 @@ if (!this.kill) {
         }
         i++;
     }
+}
+pointer.updateGestures();
+{
+    const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
+    pointer.x = positionGame.x;
+    pointer.y = positionGame.y;
 }
 
       },
@@ -5607,6 +5607,117 @@ keyboard.clear();
                 entity[VC.Flask].state = context.state
             }
         }
+    })},'FlaskPositioning.sys': function (options) {
+/* 🐱👉 Script asset FlaskPositioning.sys */
+
+
+    const BASE_FLASK_WIDTH = 194, BASE_FLASK_HEIGHT = 508, BASE_CELL_WIDTH = BASE_FLASK_WIDTH * 1.22, BASE_CELL_HEIGHT = BASE_FLASK_HEIGHT * 1.17
+    const FLASK_ASPECT_RATIO = BASE_FLASK_WIDTH / BASE_FLASK_HEIGHT, CELL_ASPECT_RATIO = BASE_CELL_WIDTH / BASE_CELL_HEIGHT
+    const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 150, MAX_FLASK_HEIGHT = MAX_FLASK_WIDTH * 2.6
+    const M = { left: 25, right: 25, bottom: 25, top: 75 }
+
+    const flasks = []
+    const positions = []
+    const grid = { rows: 0, cols: 0, width: 0, height: 0, cellScale: 1 }
+
+    function getBoardContainer() { return templates.list.Board[0] }
+    function getFlasks() {
+        utils.clearArray(flasks)
+        G.view.flasks.forEach((flask) => flasks.push(flask))
+        return flasks
+    }
+    function calculatePositions() {
+        const { width: cameraWidth, height: cameraHeight } = camera
+        const grid = findGrid(cameraHeight - M.bottom - M.top, cameraWidth - M.left - M.right, flasks.length)
+        const xOffset = grid.width / 2
+        const yOffset = grid.height / 2
+
+        for (let i = 0, col = 0, row = 0; i < flasks.length; i++) {
+            positions.push({
+                x: u.map(col, 0, grid.cols, -xOffset, xOffset) + M.left,
+                y: u.map(row, 0, grid.rows, -yOffset, yOffset) + M.top
+            })
+
+            col++
+            if (col === grid.cols) col = 0, row++
+        }
+        // console.log(grid)
+    }
+    function applyPositions() {
+        flasks.forEach((flask, i) => {
+            const position = positions[i]
+            flask[VC.Position].x = position.x
+            flask[VC.Position].y = position.y
+            flask[VC.Scale].x = flask[VC.Scale].y = grid.cellScale
+        })
+        utils.clearArray(positions)
+    }
+
+    function findGrid(vLimit, hLimit, flaskCount) {
+        // let line = 1
+
+        // while (line <= flaskCount) {
+        //     const altLineCount = Math.ceil(flaskCount / line)
+        //     const widthA = line * flaskWidth + H_GAP * (line - 1)
+        //     const heightA = altLineCount * flaskHeight + V_GAP * (altLineCount - 1)
+        //     const widthB = altLineCount * flaskWidth + H_GAP * (altLineCount - 1)
+        //     const heightB = line * flaskHeight + V_GAP * (line - 1)
+
+        //     if (widthA < hLimit && heightA < vLimit) {
+        //         // Длинный вариант
+        //         return setGrid(line, altLineCount, widthA, heightA)
+        //     }
+        //     if (heightB < vLimit && widthB < hLimit) {
+        //         // Компактный вариант
+        //         return setGrid(altLineCount, line, widthB, heightB)
+        //     }
+
+        //     line++
+        // }
+
+        let maxCellWidth = 0
+        for (let i = 1; i < flaskCount; i++) {
+            const cols = i, rows = Math.ceil(flaskCount / cols)
+            let matrixWidth = hLimit
+            let cellWidth = hLimit / cols
+            let cellHeight = cellWidth / CELL_ASPECT_RATIO
+            let matrixHeight = cellHeight * rows
+            if (matrixHeight > vLimit) {
+                const scale = vLimit / matrixHeight
+                cellHeight *= scale
+                cellWidth *= scale
+                matrixWidth *= scale
+                matrixHeight *= scale
+            }
+            if (cellWidth > maxCellWidth) {
+                maxCellWidth = cellWidth
+                grid.cols = cols
+                grid.rows = rows
+                grid.width = matrixWidth
+                grid.height = matrixHeight
+                grid.cellScale = cellWidth / BASE_CELL_WIDTH
+            } /* else if (cellWidth < maxCellWidth) break */
+        }
+
+        return grid
+    }
+
+    function setGrid(cols, rows, width, height) {
+        grid.cols = cols
+        grid.rows = rows
+        grid.width = width
+        grid.height = height
+        return grid
+    }
+
+    return createSystem({
+        onPreRender() {
+            const board = getBoardContainer()
+            getFlasks()
+            if (!board || !flasks.length) return
+            calculatePositions()
+            applyPositions()
+        }
     })},'LiquidLayerRender.sys': function (options) {
 /* 🐱👉 Script asset LiquidLayerRender.sys */
 
@@ -6005,11 +6116,7 @@ keyboard.clear();
             const t = u.map(i, 0, board.count - 1, 0, 1)
             const delay = Math.max(1, t * 1000)
             timer.add(delay).then(() => {
-                const row = Math.trunc(i / cols)
-                const col = i - row * cols
-                const x = u.map(col, 0, (cols - 1) || 1, boardLeft, boardRight - flaskWidth)
-                const y = u.map(row, 0, (rows - 1) || 1, boardTop, boardBottom - flaskHeight)
-                const viewEntity = { [VC.Position]: { x: 0, y: 0 } }
+                const viewEntity = { [VC.Position]: { x: 0, y: 0 }, [VC.Scale]: { x: 1, y: 1 } }
                 const stats = { slicedTexture: 'Flask_SF_half', fullTexture: 'Flask_SF', liquidBounds: { top: 42, bottom: 43, left: 44, right: 44 } }
                 viewEntity[VC.FlaskViewStats] = stats
                 const copy = templates.copy('Flask', 0, 0, { flaskEntity, flaskWidth, flaskHeight, cellHeight, cellWidth, viewEntity, }) 
@@ -6104,14 +6211,17 @@ keyboard.clear();
     function applyFields(viewEntity) {
         const copy = viewEntity[VC.Copy]
         const position = viewEntity[VC.Position]
+        const scale = viewEntity[VC.Scale]
 
         copy.angle = FIELD_BUFFER.angle
         if (position) {
-            copy.x +=  FIELD_BUFFER.position.x
-            copy.y +=  FIELD_BUFFER.position.y
+            copy.x += FIELD_BUFFER.position.x
+            copy.y += FIELD_BUFFER.position.y
         }
-        copy.scale.x = FIELD_BUFFER.scale.x
-        copy.scale.y = FIELD_BUFFER.scale.y
+        if (scale) {
+            copy.scale.x *= FIELD_BUFFER.scale.x
+            copy.scale.y *= FIELD_BUFFER.scale.y
+        }
     }
 
     function resetFieldBuffer() {
@@ -6202,7 +6312,21 @@ keyboard.clear();
             fields.position.y = -Math.abs(sin) * MAX_AMPLITUDE * force
         }
     } 
-},'Level.sys': function (options) {
+},'ViewPosition.sys': function (options) {
+/* 🐱👉 Script asset ViewPosition.sys */
+
+
+    return createSystem({
+        onRender() {
+            for (const entity of G.view.w.queries.position) {
+                const copy = entity[VC.Copy]
+                const position = entity[VC.Position]
+                if (!copy || !position) continue
+                copy.x = position.x
+                copy.y = position.y
+            }
+        }
+    })},'Level.sys': function (options) {
 /* 🐱👉 Script asset Level.sys */
 
  function _optionalChain(ops) { let lastAccessLHS = undefined; let value = ops[0]; let i = 1; while (i < ops.length) { const op = ops[i]; const fn = ops[i + 1]; i += 2; if ((op === 'optionalAccess' || op === 'optionalCall') && value == null) { return undefined; } if (op === 'access' || op === 'optionalAccess') { lastAccessLHS = value; value = fn(value); } else if (op === 'call' || op === 'optionalCall') { value = fn((...args) => value.call(lastAccessLHS, ...args)); lastAccessLHS = undefined; } } return value; }
@@ -6265,101 +6389,17 @@ keyboard.clear();
             addTime()
             processTimers()
         }
-    })},'FlaskPositioning.sys': function (options) {
-/* 🐱👉 Script asset FlaskPositioning.sys */
-
-
-    const V_GAP = 64, H_GAP = 32, MAX_FLASK_WIDTH = 150, MAX_FLASK_HEIGHT = MAX_FLASK_WIDTH * 2.6
-    const MARGIN = 25
-
-    const flasks = []
-    const positions = []
-    const grid = { rows: 0, cols: 0, width: 0, height: 0 }
-
-    function getBoardContainer() { return templates.list.Board[0] }
-    function getFlasks() {
-        utils.clearArray(flasks)
-        G.view.flasks.forEach((flask) => flasks.push(flask))
-        return flasks
-    }
-    function calculatePositions() {
-        const { width: cameraWidth, height: cameraHeight } = camera
-        const grid = findGrid(cameraHeight - MARGIN, cameraWidth - MARGIN, MAX_FLASK_WIDTH, MAX_FLASK_HEIGHT, flasks.length)
-        const xOffset = grid.width / 2
-        const yOffset = grid.height / 2
-
-        for (let i = 0, col = 0, row = 0; i < flasks.length; i++) {
-
-            positions.push({ x: u.map(col, 0, grid.cols, -xOffset, xOffset), y: u.map(row, 0, grid.rows, -yOffset, yOffset) })
-
-            col++
-            if (col === grid.cols) col = 0, row++
-        }
-        // console.log(grid)
-    }
-    function applyPositions() {
-        flasks.forEach((flask, i) => {
-            const position = positions[i]
-            flask[VC.Position].x = position.x
-            flask[VC.Position].y = position.y
-        })
-        utils.clearArray(positions)
-    }
-
-    function findGrid(vLimit, hLimit, flaskWidth, flaskHeight, flaskCount) {
-        let line = 1
-
-        while (line <= flaskCount) {
-            const altLineCount = Math.ceil(flaskCount / line)
-            const widthA = line * flaskWidth + H_GAP * (line - 1)
-            const heightA = altLineCount * flaskHeight + V_GAP * (altLineCount - 1)
-            const widthB = altLineCount * flaskWidth + H_GAP * (altLineCount - 1)
-            const heightB = line * flaskHeight + V_GAP * (line - 1)
-
-            if (widthA < hLimit && heightA < vLimit) {
-                // Длинный вариант
-                return setGrid(line, altLineCount, widthA, heightA)
-            }
-            if (heightB < vLimit && widthB < hLimit) {
-                // Компактный вариант
-                return setGrid(altLineCount, line, widthB, heightB)
-            }
-
-            line++
-        }
-
-        // console.log('grid not found')
-        return grid
-    }
-
-    function setGrid(cols, rows, width, height) {
-        grid.cols = cols
-        grid.rows = rows
-        grid.width = width
-        grid.height = height
-        return grid
-    }
-
-    return createSystem({
-        onPreRender() {
-            const board = getBoardContainer()
-            getFlasks()
-            if (!board || !flasks.length) return
-            calculatePositions()
-            applyPositions()
-        }
-    })},'ViewPosition.sys': function (options) {
-/* 🐱👉 Script asset ViewPosition.sys */
+    })},'ViewScale.sys': function (options) {
+/* 🐱👉 Script asset ViewScale.sys */
 
 
     return createSystem({
         onRender() {
-            for (const entity of G.view.w.queries.position) {
+            for (const entity of G.view.w.queries.scale) {
                 const copy = entity[VC.Copy]
-                const position = entity[VC.Position]
-                if (!copy || !position) continue
-                copy.x = position.x
-                copy.y = position.y
+                const scale = entity[VC.Scale]
+                if (!copy || !scale) continue
+                copy.scale.set(scale.x, scale.y)
             }
         }
     })},
@@ -6536,7 +6576,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
     deadPool.length = 0;
   }, 1e3 * 60);
   var meta = [
-    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.1.0"}
+    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.1.1"}
   ][0];
   var currentViewMode = "scaleFill";
   var currentHighDPIMode = Boolean([
@@ -6742,7 +6782,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
   window.PIXI = PIXI;
   mount();
   
-  let VERSION = "0.1.0";
+  let VERSION = "0.1.1";
 
   {
     const actions = actionsLib;
@@ -6900,7 +6940,7 @@ templates.templates["Flask"] = {
   const liquidContainer = new PIXI.Container()
 
   const slicedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_half')[0])
-  spriteContainer.scale.set(flaskHeight / slicedSprite.height)
+  // spriteContainer.scale.set(flaskHeight / slicedSprite.height)
   const solvedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_full')[0])
   solvedSprite.alpha = 0
   const cm = new PIXI.ColorMatrixFilter
@@ -6922,16 +6962,19 @@ templates.templates["Flask"] = {
   colorFilter.brightness(2, true)
   liquidContainer.filters = [colorFilter]
 
-  const hitbox = new PIXI.Sprite
-  hitbox.width = cellWidth
-  hitbox.height = cellHeight
-  hitbox.position.set(-(cellWidth - flaskWidth) / 2, -(cellHeight - flaskHeight) / 2)
+  const hitbox = new PIXI.Sprite(PIXI.Texture.WHITE)
+  hitbox.alpha = 0
+  hitbox.width = slicedSprite.width * 1.22
+  hitbox.height = slicedSprite.height * 1.17
+  hitbox.position.set(-(hitbox.width - slicedSprite.width) / 2, -(hitbox.height - slicedSprite.height) / 2)
+  // hitbox.pivot.set(hitbox.width / 2, hitbox.height / 2)
 
   this.liquidContainer = liquidContainer
-  this.flaskContainer = flaskContainer
+  this.flaskContainer = flaskContainer 
   this.addChild(hitbox, flaskContainer)
   this.solvedSprite = solvedSprite
   this.slicedSprite = slicedSprite
+  this.hitbox = hitbox
 
   // Анимация появления
   const alphaFilter = this.alphaFilter = new PIXI.AlphaFilter(0)
@@ -11946,7 +11989,11 @@ var VC; (function (VC) {
   const AnimationData = 'AnimationState'; VC["AnimationData"] = AnimationData;
   const FlaskViewStats = 'FlaskViewStats'; VC["FlaskViewStats"] = FlaskViewStats;
   const Position = 'Position'; VC["Position"] = Position;
+  const Scale = 'Scale'; VC["Scale"] = Scale;
 })(VC || (VC = {}));
+
+
+
 
 
 
@@ -11987,9 +12034,9 @@ const createViewWorld = () => {
       copy = w.with(VC.Copy),
       remove = w.with(VC.Remove),
       animation = w.with(VC.Animation, VC.AnimationData), animated = copy.with(VC.AnimationList),
-      position = w.with(VC.Position)
+      position = copy.with(VC.Position), scale = copy.with(VC.Scale)
 
-    return { liquidLayer, flask, fadedFlask, remove, copy, animated, animation, position, }
+    return { liquidLayer, flask, fadedFlask, remove, copy, animated, animation, position, scale, }
   })
 }
 
