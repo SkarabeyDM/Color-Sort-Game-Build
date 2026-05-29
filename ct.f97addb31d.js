@@ -3451,7 +3451,7 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
         loadingBar.style.width = percents + "%";
       };
       let atlases = [
-        ["./img/a0.{webp,png}.7eb006e2f9.json"]
+        ["./img/a0.{webp,png}.2a14a6c1fc.json"]
       ][0];
       let bitmapFonts = [
         []
@@ -4303,13 +4303,7 @@ if (!this.kill) {
        * @catnipIgnore
        */
       beforeStep() {
-        pointer.updateGestures();
-{
-    const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
-    pointer.x = positionGame.x;
-    pointer.y = positionGame.y;
-}
-{
+        {
     let i = 0;
     while (i < tween.tweens.length) {
         const twoon = tween.tweens[i];
@@ -4344,6 +4338,12 @@ if (!this.kill) {
         }
         i++;
     }
+}
+pointer.updateGestures();
+{
+    const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
+    pointer.x = positionGame.x;
+    pointer.y = positionGame.y;
 }
 
       },
@@ -5542,28 +5542,44 @@ pointer.xmovement = pointer.ymovement = 0;
 /* 🐱👉 Script asset FlaskView.sys */
 
 
-    var E; (function (E) { const Update = 0; E[E["Update"] = Update] = "Update"; })(E || (E = {}));
+    var E; (function (E) { const UPDATE = 0; E[E["UPDATE"] = UPDATE] = "UPDATE"; const HOVER = UPDATE + 1; E[E["HOVER"] = HOVER] = "HOVER"; const UNHOVER = HOVER + 1; E[E["UNHOVER"] = UNHOVER] = "UNHOVER"; const REJECTED = UNHOVER + 1; E[E["REJECTED"] = REJECTED] = "REJECTED"; const BOARD_SOLVED = REJECTED + 1; E[E["BOARD_SOLVED"] = BOARD_SOLVED] = "BOARD_SOLVED"; })(E || (E = {}));
     
 
     const context = { state: FlaskViewState.Unselected, entity: null  }
     const flaskViewFSM = new fsm.HFSM({
         context,
         states: {
+            [FlaskViewState.Start]: {
+                transitions: [
+                    { event: E.UPDATE, to: FlaskViewState.Unselected, on: [show] },
+                ]
+            },
             [FlaskViewState.Unselected]: {
                 transitions: [
-                    { event: E.Update, to: FlaskViewState.Solved, condition: isModelSoved, },
-                    { event: E.Update, to: FlaskViewState.Selected, condition: isSelected, },
+                    { event: E.HOVER, condition: isHoverable, on: [hover] },
+                    { event: E.UNHOVER, on: [unhover] },
+                    { event: E.REJECTED, on: [reject] },
+                    { event: E.BOARD_SOLVED, to: FlaskViewState.End, on: [close] },
+                    { event: E.UPDATE, to: FlaskViewState.Solved, condition: isModelSoved, on: [bounce] },
+                    { event: E.UPDATE, to: FlaskViewState.Selected, condition: isSelected, },
                 ]
             },
             [FlaskViewState.Selected]: {
-                onAfterEnter: [select],
-                onAfterExit: [deselect],
-                transitions: [{ event: E.Update, to: FlaskViewState.Unselected, condition: isNotSelected }]
+                entry: [select],
+                exit: [deselect],
+                transitions: [
+                    { event: E.REJECTED, on: [reject] },
+                    { event: E.BOARD_SOLVED, to: FlaskViewState.End, on: [close] },
+                    { event: E.UPDATE, to: FlaskViewState.Unselected, condition: isNotSelected },
+                ]
             },
             [FlaskViewState.Solved]: {
-                onAfterEnter: [showSolved, bounce],
-                onBeforeExit: [hideSolved],
-                transitions: [{ event: E.Update, to: FlaskViewState.Unselected, condition: isNotModelSoved, }]
+                entry: [close],
+                transitions: [
+                    { event: E.REJECTED, on: [reject] },
+                    { event: E.BOARD_SOLVED, to: FlaskViewState.End },
+                    { event: E.UPDATE, to: FlaskViewState.Unselected, condition: isNotModelSoved, on: [open] },
+                ]
             },
         }
     })
@@ -5573,16 +5589,23 @@ pointer.xmovement = pointer.ymovement = 0;
     function isNotModelSoved(c) { return !isModelSoved(c) }
     function isSelected({ entity }) { return G.model.flasks[(entity[VC.Flask].index)][MC.Flask].selection === SelectionState.Selected }
     function isNotSelected(c) { return !isSelected(c) }
+    function isHoverable(c) {
+        const modelEntity = G.model.flasks[c.entity[VC.Flask].index]
+        const modelFlask = modelEntity[MC.Flask]
+        const isPC = pointer.type !== 'touch'
+        const isNotSelected = modelFlask.selection !== SelectionState.Selected
+        return isPC && isNotSelected && Flask.isSelectable(modelFlask)
+    }
 
     // Actions
-    function showSolved({ entity }) {
-        const { solvedSprite } = entity[VC.Copy]
-        tween.add({ obj: solvedSprite, fields: { alpha: 1 }, duration: 300, })
-    }
     function bounce({ entity }) {
         G.view.animate(entity, { name: AnimationName.Bounce, duration: 1 })
     }
-    function hideSolved({ entity }) {
+    function close({ entity }) {
+        const { solvedSprite } = entity[VC.Copy]
+        tween.add({ obj: solvedSprite, fields: { alpha: 1 }, duration: 500, })
+    }
+    function open({ entity }) {
         const { solvedSprite } = entity[VC.Copy]
         tween.add({ obj: solvedSprite, fields: { alpha: 0 }, duration: 150, })
     }
@@ -5590,21 +5613,83 @@ pointer.xmovement = pointer.ymovement = 0;
         const copy = c.entity[VC.Copy]
         copy.yTween(0)
         copy.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
+        tween.add({
+            obj: copy.selectionEffectSprite,
+            fields: { alpha: 0 },
+            duration: 150,
+            curve: tween.linear,
+            silent: true,
+        })
     }
     function select(c) {
         const copy = c.entity[VC.Copy]
         copy.yTween(-64)
         copy.scaleTween(1.05, { curve: tween.easeInQuad, duration: 150 })
+        tween.add({
+            obj: copy.selectionEffectSprite,
+            fields: { alpha: 1 },
+            duration: 150,
+            curve: tween.linear,
+            silent: true,
+        })
+    }
+    function hover(c) { const copy = c.entity[VC.Copy]; copy.scaleTween(1.05, { curve: tween.easeOutBack }) }
+    function unhover(c) { const copy = c.entity[VC.Copy]; copy.scaleTween(1, { curve: tween.easeOutBack }) }
+    function reject(c) { G.view.animate(c.entity, { name: AnimationName.Shake, duration: 0.3 }) }
+    async function show(c) {
+        const copy = c.entity[VC.Copy]
+        await timer.add(copy.delay)
+        copy.cursor = 'pointer'
+        tween.add({
+            obj: copy.alphaFilter,
+            fields: { alpha: 1 },
+            duration: 500,
+            curve: tween.linear,
+            silent: true,
+        })
     }
 
+    // Utilities
+    function dispatch(entity, event) {
+        context.state = entity[VC.Flask].state
+        context.entity = entity
+        flaskViewFSM.dispatch(event)
+        entity[VC.Flask].state = context.state
+    }
 
     return createSystem({
         onRender() {
+            for (const pourFailed of G.events.w.queries.pourFailed) {
+                const { from, to } = pourFailed[EC.PourFailed]
+                const fromEntity = G.view.flasks[from]
+                const toEntity = G.view.flasks[to]
+                fromEntity && dispatch(fromEntity, E.REJECTED)
+                toEntity && dispatch(toEntity, E.REJECTED)
+            }
+
+            for (const event of G.events.w.queries.flaskSelectionFailed) {
+                const entity = G.view.flasks[event[EC.FlaskSelectionFailed]]
+                entity && dispatch(entity, E.REJECTED)
+            }
+
+            for (const event of G.events.w.queries.flaskHover) {
+                const entity = G.view.flasks[event[EC.FlaskHover]]
+                entity && dispatch(entity, E.HOVER)
+            }
+
+            for (const event of G.events.w.queries.flaskUnhover) {
+                const entity = G.view.flasks[event[EC.FlaskUnhover]]
+                entity && dispatch(entity, E.UNHOVER)
+            }
+
             for (const entity of G.view.w.queries.flask) {
-                context.state = entity[VC.Flask].state
-                context.entity = entity
-                flaskViewFSM.dispatch(E.Update)
-                entity[VC.Flask].state = context.state
+                dispatch(entity, E.UPDATE)
+            }
+
+            if (G.hasEvent('boardSolved')) {
+                for (const entity of G.view.flasks) {
+                    dispatch(entity, E.BOARD_SOLVED)
+                }
             }
         }
     })},'FlaskPositioning.sys': function (options) {
@@ -5627,7 +5712,7 @@ pointer.xmovement = pointer.ymovement = 0;
     }
     function calculatePositions() {
         const { width: cameraWidth, height: cameraHeight } = camera
-        const grid = findGrid(cameraHeight - M.bottom - M.top, cameraWidth - M.left - M.right, flasks.length)
+        findGrid(cameraHeight - M.bottom - M.top, cameraWidth - M.left - M.right, flasks.length)
         const xOffset = grid.width / 2
         const yOffset = grid.height / 2
 
@@ -5640,7 +5725,6 @@ pointer.xmovement = pointer.ymovement = 0;
             col++
             if (col === grid.cols) col = 0, row++
         }
-        // console.log(grid)
     }
     function applyPositions() {
         flasks.forEach((flask, i) => {
@@ -5676,16 +5760,15 @@ pointer.xmovement = pointer.ymovement = 0;
                 grid.cellScale = cellWidth / BASE_CELL_WIDTH
             }
         }
-
-        return grid
+        optimizeGrid(flaskCount)
     }
 
-    function setGrid(cols, rows, width, height) {
-        grid.cols = cols
-        grid.rows = rows
-        grid.width = width
-        grid.height = height
-        return grid
+    function optimizeGrid(flaskCount) {
+        // Исправление бага, который не некоторых значениях ширины высчитывает лишние колонки
+        while ((grid.cols - 1) * grid.rows >= flaskCount)
+            grid.cols--
+
+        grid.width = grid.cols * grid.cellScale * BASE_CELL_WIDTH
     }
 
     return createSystem({
@@ -5705,14 +5788,13 @@ pointer.xmovement = pointer.ymovement = 0;
         const modelEntity = G.model.flasks[viewData.index]
         if (!modelEntity) return
         const model = modelEntity[MC.Flask]
-        compareViewAndModel(model)
+        modelColorsToLayers(model)
         syncSpritesWithModel(view)
         placeSprites(viewData.layers, viewData.volume, view)
     }
 
     const modelGroups = []
-    // Сравнивает модель с представлением
-    function compareViewAndModel(flask) {
+    function modelColorsToLayers(flask) {
         utils.clearArray(modelGroups)
         flask.stack.forEach(modelType => {
             const peak = utils.peak(modelGroups)
@@ -5726,28 +5808,42 @@ pointer.xmovement = pointer.ymovement = 0;
     // Добавляет и удаляет спрайты
     function syncSpritesWithModel(flaskViewEntity) {
         const flaskView = flaskViewEntity[VC.Flask]
-        const { layers, liquidContainerCopy } = flaskView
+        const { layers } = flaskView
         for (let m = 0, v = 0; m < modelGroups.length || v < layers.length;) {
             const layer = G.view.w.entity(layers[v])
             const model = modelGroups[m]
 
             if (model && layer) {
                 if (model.type === layer[VC.LiquidLayer].type) {
+                    // Тип модели совпадает с типом слоя
+                    // Увеличиваем текущий слой
                     layer[VC.LiquidLayer].volume = model.volume
                     newLayers.push(layer.id)
                     m++
                     v++
-                } else {
+                } else if (layer[VC.LiquidLayer].volume !== 0) {
+                    // Тип модели НЕ совпадает с типом слоя, а слой ещё не удаляется
+                    // Убираем лишний слой
                     removeLayer(layer)
                     v++
+                } else {
+                    // Тип модели НЕ совпадает с типом слоя, а слой уже удаляется
+                    // Пропускаем, ждём удаления
+                    m++
                 }
             } else if (model && !layer) {
-                addLayer(model, liquidContainerCopy, flaskViewEntity)
+                // Есть модель, но отсутствует слой
+                // Добавляем недостающий слой
+                addLayer(model, flaskViewEntity)
                 m++
             } else if (!model && layer) {
+                // Есть слой, но модель отсутствует
+                // Убираем лишний слой
                 removeLayer(layer)
                 v++
             } else {
+                // Осутствуют и модель, и слой
+                m++
                 v++
             }
         }
@@ -5788,7 +5884,7 @@ pointer.xmovement = pointer.ymovement = 0;
 
     function isCloseEnough(a, b) { return utils.isClose(a, b, 0.1) }
 
-    function addLayer(model, liquidContainer, flaskViewEntity) {
+    function addLayer(model, flaskViewEntity) {
         const stats = flaskViewEntity[VC.FlaskViewStats]
         const { slicedTexture, liquidBounds } = stats
         const width = res.textures[slicedTexture][0].width
@@ -5800,7 +5896,7 @@ pointer.xmovement = pointer.ymovement = 0;
             }) ,
             [VC.LiquidLayer]: { type: model.type, volume: model.volume, state: LiquidLayerState.Pouring }
         }
-        liquidContainer.addChild(layer[VC.Copy])
+        flaskViewEntity[VC.Flask].liquidContainerCopy.addChild(layer[VC.Copy])
         G.view.w.add(layer)
         newLayers.push(layer.id)
         return layer
@@ -6038,6 +6134,7 @@ pointer.xmovement = pointer.ymovement = 0;
             }))
         }
         await Promise.all(animations)
+
         return FADED_OUT
     }
 
@@ -6059,6 +6156,10 @@ pointer.xmovement = pointer.ymovement = 0;
     function eraseBoard() {
         rooms.remove(rooms.list['Level'][0])
         G.view.flasks = []
+
+        for (const flask of G.view.w.queries.flask) {
+            G.view.w.addComponent(flask, VC.Remove)
+        }
     }
 
     function drawBoard() {
@@ -6070,27 +6171,22 @@ pointer.xmovement = pointer.ymovement = 0;
             const flask = flaskEntity[MC.Flask]
             const i = flask.index
             const t = u.map(i, 0, board.count - 1, 0, 1)
-            const delay = Math.max(1, t * 1)
-            timer.add(delay).then(() => {
-                const viewEntity = { [VC.Position]: { x: 0, y: 0 }, [VC.Scale]: { x: 1, y: 1 } }
-                const stats = { slicedTexture: 'Flask_SF_half', fullTexture: 'Flask_SF', liquidBounds: { top: 42, bottom: 43, left: 44, right: 44 } }
-                viewEntity[VC.FlaskViewStats] = stats
-                const copy = templates.copy('Flask', 0, 0, { flaskEntity, viewEntity }) 
-                viewEntity[VC.Copy] = copy
-                viewEntity[VC.Flask] = {
-                    index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer,
-                    liauidPaddings: { top: 42, bottom: 43, left: 44, right: 44 },
-                    state: FlaskViewState.Unselected
-                }
-                G.view.w.add(viewEntity)
-                container.addChild(copy)
-                G.view.flasks[flask.index] = viewEntity
-            })
+            const delay = Math.max(1, t * 1000)
+            const viewEntity = { [VC.Position]: { x: 0, y: 0 }, [VC.Scale]: { x: 1, y: 1 } }
+            const stats = { slicedTexture: 'Flask_SF_half', fullTexture: 'Flask_SF', liquidBounds: { top: 42, bottom: 43, left: 44, right: 44 } }
+            viewEntity[VC.FlaskViewStats] = stats
+            const copy = templates.copy('Flask', 0, 0, { viewEntity, delay, index: i }) 
+            viewEntity[VC.Copy] = copy
+            viewEntity[VC.Flask] = {
+                index: flask.index, volume: flask.volume, layers: [], liquidContainerCopy: copy.liquidContainer,
+                liauidPaddings: { top: 42, bottom: 43, left: 44, right: 44 },
+                state: FlaskViewState.Start
+            }
+            G.view.w.add(viewEntity)
+            container.addChild(copy)
+            G.view.flasks[flask.index] = viewEntity
         }
 
-        for (const flask of G.view.w.queries.flask) {
-            G.view.w.addComponent(flask, VC.Remove)
-        }
     }
 
 
@@ -6286,6 +6382,19 @@ pointer.xmovement = pointer.ymovement = 0;
                 copy.y = position.y
             }
         }
+    })},'ViewScale.sys': function (options) {
+/* 🐱👉 Script asset ViewScale.sys */
+
+
+    return createSystem({
+        onRender() {
+            for (const entity of G.view.w.queries.scale) {
+                const copy = entity[VC.Copy]
+                const scale = entity[VC.Scale]
+                if (!copy || !scale) continue
+                copy.scale.set(scale.x, scale.y)
+            }
+        }
     })},'Level.sys': function (options) {
 /* 🐱👉 Script asset Level.sys */
 
@@ -6348,19 +6457,6 @@ pointer.xmovement = pointer.ymovement = 0;
         onTime() {
             addTime()
             processTimers()
-        }
-    })},'ViewScale.sys': function (options) {
-/* 🐱👉 Script asset ViewScale.sys */
-
-
-    return createSystem({
-        onRender() {
-            for (const entity of G.view.w.queries.scale) {
-                const copy = entity[VC.Copy]
-                const scale = entity[VC.Scale]
-                if (!copy || !scale) continue
-                copy.scale.set(scale.x, scale.y)
-            }
         }
     })},
   };
@@ -6536,7 +6632,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
     deadPool.length = 0;
   }, 1e3 * 60);
   var meta = [
-    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.1.1"}
+    {"name":"Sort","author":"SkarabeyDM","site":"","version":"0.1.2"}
   ][0];
   var currentViewMode = "scaleFill";
   var currentHighDPIMode = Boolean([
@@ -6742,7 +6838,7 @@ ${ev.error?.stack ?? "(no stack available)"}`;
   window.PIXI = PIXI;
   mount();
   
-  let VERSION = "0.1.1";
+  let VERSION = "0.1.2";
 
   {
     const actions = actionsLib;
@@ -6828,61 +6924,7 @@ templates.templates["Flask"] = {
         
     },
     onDraw: function () {
-        /* 🐱👉 template Flask — On frame end event (core_OnDraw) */
-{
-
-  for (const event of G.events.w.queries.flaskUpdated) {
-    if (event[EC.FlaskUpdated] !== this.viewEntity[VC.Flask].index) continue
-
-    if (EC.FlaskDeselected in event) {
-      // Анимация отпускания
-      // this.yTween(0)
-      // this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
-    }
-
-    if (EC.FlaskSelected in event) {
-      // Анимация подбирания
-      // this.yTween(-64)
-      // this.scaleTween(1.05, { curve: tween.easeInQuad, duration: 150 })
-    }
-
-    if (EC.PourFailed in event || EC.FlaskSelectionFailed in event) {
-      // Анимация отказа
-      G.view.animate(this.viewEntity, { name: AnimationName.Shake, duration: 0.3 })
-    }
-  }
-
-  for (const pourFailed of G.events.w.queries.pourFailed) {
-    const { from, to } = pourFailed[EC.PourFailed]
-    const { index } = this.viewEntity[VC.Flask]
-    if (from !== index && to !== index) continue
-
-    // Анимация отказа
-    G.view.animate(this.viewEntity, { name: AnimationName.Shake, duration: 0.3 })
-  }
-
-  for (const solvedFlask of G.events.w.queries.flaskSolved) {
-    if (solvedFlask[EC.FlaskSolved] !== this.viewEntity[VC.Flask].index) continue
-    // Анимация решённой колбы
-    // this.scaleTween(1, { curve: tween.easeInQuad, duration: 150 })
-    // tween.add({ obj: this.solvedSprite, fields: { alpha: 1 }, duration: 300, })
-    // G.view.animate(this.viewEntity, { name: AnimationName.Bounce, duration: 1 })
-  }
-
-  if (G.events.w.queries.boardSolved.size) {
-    tween.add({ obj: this.solvedSprite, fields: { alpha: 1 }, duration: 300, })
-  }
-
-  // this.t += u.time * 10
-  // const scaleOffsetX = 0.1
-  // const scaleOffsetY = 0.2
-  // const sX = u.map(Math.sin(this.t), -1, 1, 1 - scaleOffsetX, 1 + scaleOffsetX)
-  // const sY = u.map(Math.cos(this.t), -1, 1, 1 - scaleOffsetY, 1 + scaleOffsetY)
-  // this.flaskContainer.scale.set(sX, sY)
-
-
-}
-
+        
     },
     onDestroy: function () {
         
@@ -6899,6 +6941,9 @@ templates.templates["Flask"] = {
   const liquidContainer = new PIXI.Container()
 
   const slicedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_half')[0])
+  const selectionEffectSprite = new PIXI.Sprite(res.getTexture('Selection_Effect')[0])
+  selectionEffectSprite.blendMode = PIXI.BLEND_MODES.ADD
+  selectionEffectSprite.alpha = 0
   const solvedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_full')[0])
   solvedSprite.alpha = 0
   const cm = new PIXI.ColorMatrixFilter
@@ -6908,7 +6953,7 @@ templates.templates["Flask"] = {
   const alphaSprite = new PIXI.Sprite(res.getTexture('Liquid_container_A')[0])
   alphaSprite.renderable = false
   liquidContainer.mask = alphaSprite
-  spriteContainer.addChild(slicedSprite, alphaSprite, liquidContainer, solvedSprite)
+  spriteContainer.addChild(slicedSprite, selectionEffectSprite, alphaSprite, liquidContainer, solvedSprite)
 
   flaskContainer.addChild(spriteContainer)
   const fX = flaskContainer.width / 2, fY = flaskContainer.height / 2
@@ -6931,25 +6976,14 @@ templates.templates["Flask"] = {
   this.addChild(hitbox, flaskContainer)
   this.solvedSprite = solvedSprite
   this.slicedSprite = slicedSprite
+  this.selectionEffectSprite = selectionEffectSprite
   this.hitbox = hitbox
 
-  // Анимация появления
-  const alphaFilter = this.alphaFilter = new PIXI.AlphaFilter(0)
-  const duration = 500
-  mod(() => {
-    this.cursor = 'pointer'
-    tween.add({
-      obj: this.alphaFilter,
-      fields: { alpha: 1 },
-      duration,
-      curve: tween.linear,
-      silent: true,
-    })
-  })
-  this.filters = [alphaFilter]
+  this.filters = [this.alphaFilter = new PIXI.AlphaFilter(0)]
 
   this.yTween = scripts['flask.yTween'](flaskContainer)
   this.scaleTween = scripts['flask.scaleTween'](flaskContainer)
+
 
 }
 /* 🐱👉 template Flask — OnPointerClick event (core_OnPointerClick) */
@@ -6960,7 +6994,7 @@ this.on('pointertap', () => {
   let clickType = ClickType.Unknown
   actions.Press.down && (clickType = ClickType.Primary)
   actions.AltPress.down && (clickType = ClickType.Secondary)
-  G.events.w.add({ [EC.FlaskClicked]: this.viewEntity[VC.Flask].index, [EC.ClickType]: clickType })
+  G.events.w.add({ [EC.FlaskClicked]: this.index, [EC.ClickType]: clickType })
 
 
 });
@@ -6969,20 +7003,15 @@ this.eventMode = 'dynamic';
 this.on('pointerover', () => {
     
 
-  const flask = this.flaskEntity[MC.Flask]
-  if (pointer.type !== 'touch' && flask.selection !== SelectionState.Selected && Flask.isSelectable(flask)) {
-    this.scaleTween(1.05, { curve: tween.easeOutBack })
-  }
+  G.events.w.add({ [EC.FlaskHover]: this.index })
 
 });
 /* 🐱👉 template Flask — OnPointerLeave event (core_OnPointerLeave) */
 this.eventMode = 'dynamic';
 this.on('pointerout', () => {
     
-  const flask = this.flaskEntity[MC.Flask]
-  if (pointer.type !== 'touch' && flask.selection !== SelectionState.Selected && Flask.isSelectable(flask)) {
-    this.scaleTween(1, { curve: tween.easeOutBack })
-  }
+
+  G.events.w.add({ [EC.FlaskUnhover]: this.index })
 
 });
 
@@ -11825,6 +11854,8 @@ var EC; (function (EC) {
 
   const ClickType = 'ClickType'; EC["ClickType"] = ClickType;
   const FlaskClicked = 'FlaskClicked'; EC["FlaskClicked"] = FlaskClicked;
+  const FlaskHover = 'FlaskHover'; EC["FlaskHover"] = FlaskHover;
+  const FlaskUnhover = 'FlaskUnhover'; EC["FlaskUnhover"] = FlaskUnhover;
   const FlaskSolved = 'FlaskSolved'; EC["FlaskSolved"] = FlaskSolved;
   const FlaskSelected = 'FlaskSelected'; EC["FlaskSelected"] = FlaskSelected;
   const FlaskDeselected = 'FlaskDeselected'; EC["FlaskDeselected"] = FlaskDeselected;
@@ -11843,6 +11874,8 @@ var EC; (function (EC) {
   const BoardViewStateChanged = 'BoardViewStateChanged'; EC["BoardViewStateChanged"] = BoardViewStateChanged;
   const BoardViewFadedOut = 'BoardViewFaded'; EC["BoardViewFadedOut"] = BoardViewFadedOut;
 })(EC || (EC = {}));
+
+
 
 
 
@@ -11911,6 +11944,9 @@ const createEventWorld = () => {
       flaskDeselected,
       flaskSolved,
       flaskUpdated,
+      flaskHover: w.with(EC.FlaskHover),
+      flaskUnhover: w.with(EC.FlaskUnhover),
+      flaskSelectionFailed: w.with(EC.FlaskSelectionFailed),
 
       tryPour,
       pour,
@@ -11980,6 +12016,7 @@ var VC; (function (VC) {
 
 
 
+
 const createViewWorld = () => {
   return ECS.World.create((w) => {
     const
@@ -12013,6 +12050,8 @@ class ViewService {constructor() { ViewService.prototype.__init.call(this);ViewS
 
     target[VC.AnimationList].add(animation.id)
   }
+
+  fadeRestart() { }
 }
 
 
@@ -12054,9 +12093,12 @@ var BoardViewState; (function (BoardViewState) {
 })(BoardViewState || (BoardViewState = {}));
 
 var FlaskViewState; (function (FlaskViewState) {
+  const Start = 'Start'; FlaskViewState["Start"] = Start;
   const Unselected = 'Unselected'; FlaskViewState["Unselected"] = Unselected;
   const Selected = 'Selected'; FlaskViewState["Selected"] = Selected;
   const Solved = 'Solved'; FlaskViewState["Solved"] = Solved;
+  const Fading = 'Fading'; FlaskViewState["Fading"] = Fading;
+  const End = 'End'; FlaskViewState["End"] = End;
 })(FlaskViewState || (FlaskViewState = {}));
 
 
