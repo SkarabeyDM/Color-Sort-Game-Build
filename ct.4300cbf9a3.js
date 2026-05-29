@@ -4303,7 +4303,13 @@ if (!this.kill) {
        * @catnipIgnore
        */
       beforeStep() {
-        {
+        pointer.updateGestures();
+{
+    const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
+    pointer.x = positionGame.x;
+    pointer.y = positionGame.y;
+}
+{
     let i = 0;
     while (i < tween.tweens.length) {
         const twoon = tween.tweens[i];
@@ -4339,12 +4345,6 @@ if (!this.kill) {
         i++;
     }
 }
-pointer.updateGestures();
-{
-    const positionGame = camera.uiToGameCoord(pointer.xui, pointer.yui);
-    pointer.x = positionGame.x;
-    pointer.y = positionGame.y;
-}
 
       },
       /**
@@ -4369,8 +4369,7 @@ pointer.updateGestures();
        * @catnipIgnore
        */
       afterDraw() {
-        keyboard.clear();
-for (const p of pointer.down) {
+        for (const p of pointer.down) {
     p.xprev = p.x;
     p.yprev = p.y;
     p.xuiprev = p.x;
@@ -4385,6 +4384,7 @@ for (const p of pointer.hover) {
 inputs.registry['pointer.Wheel'] = 0;
 pointer.clearReleased();
 pointer.xmovement = pointer.ymovement = 0;
+keyboard.clear();
 
         if (this.behaviors.length) {
           runBehaviors(this, "rooms", "thisOnDraw");
@@ -5557,7 +5557,7 @@ pointer.xmovement = pointer.ymovement = 0;
             [FlaskViewState.Unselected]: {
                 transitions: [
                     { event: E.HOVER, condition: isHoverable, on: [hover] },
-                    { event: E.UNHOVER, on: [unhover] },
+                    { event: E.UNHOVER, condition: isHoverable, on: [unhover] },
                     { event: E.REJECTED, on: [reject] },
                     { event: E.BOARD_SOLVED, to: FlaskViewState.End, on: [close] },
                     { event: E.UPDATE, to: FlaskViewState.Solved, condition: isModelSoved, on: [bounce] },
