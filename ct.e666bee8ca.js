@@ -3451,7 +3451,7 @@ if ((this.transform && (this.transform._localID !== this.transform._currentLocal
         loadingBar.style.width = percents + "%";
       };
       let atlases = [
-        ["./img/a0.{webp,png}.2a14a6c1fc.json"]
+        ["./img/a0.{webp,png}.2eff04ddbd.json"]
       ][0];
       let bitmapFonts = [
         []
@@ -6944,6 +6944,10 @@ templates.templates["Flask"] = {
   const selectionEffectSprite = new PIXI.Sprite(res.getTexture('Selection_Effect')[0])
   selectionEffectSprite.blendMode = PIXI.BLEND_MODES.ADD
   selectionEffectSprite.alpha = 0
+  selectionEffectSprite.scale.set(1 / 0.888112)
+  selectionEffectSprite.eventMode = 'none'
+  selectionEffectSprite.x = (slicedSprite.width - selectionEffectSprite.width) / 2
+  selectionEffectSprite.y = -20
   const solvedSprite = new PIXI.Sprite(res.getTexture('Flask_SF_full')[0])
   solvedSprite.alpha = 0
   const cm = new PIXI.ColorMatrixFilter
